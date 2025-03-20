@@ -25,9 +25,13 @@ To test the Athena DeepCite extension in its current state:
 2. Look for the "Analyze Webpage" button in the top-right corner of the page
 3. Click the button to begin analysis
 4. Wait for the analysis to complete (the button will show "Analysis Complete")
-5. Factual claims should be highlighted with a subtle blue background
-6. Hover over a highlighted claim to see source information and confidence scores
-7. Click on a source link to open the original source document
+5. A claims overlay panel will appear on the right side, showing all detected factual claims
+6. Factual claims in the text should be highlighted with a subtle blue background
+7. Only claims with a fact certainty score above 40% will be highlighted and included in the overlay
+8. Hover over a highlighted claim to see a tooltip with source information and certainty score
+9. Click on a claim in the overlay panel to jump to its location in the text
+10. Click the close button (×) in the top right of the overlay to minimize the panel
+11. Click on a source link to open the original source document
 
 **Good test pages**:
 - Wikipedia articles on scientific topics
@@ -39,9 +43,12 @@ To test the Athena DeepCite extension in its current state:
 1. Open a PDF document in Chrome
 2. Look for the "Analyze PDF" button in the top-right corner
 3. Click the button to begin analysis
-4. Wait for the overlay panel to appear on the right side
-5. The panel should show detected claims with source information
-6. Click on a claim to navigate to its location in the PDF
+4. Wait for the claims overlay panel to appear on the right side
+5. The panel will show detected claims with fact certainty scores and source information
+6. Only claims with a fact certainty score above 40% will be included in the overlay
+7. Each claim shows a visual meter indicating its certainty level
+8. Click on a claim to navigate to its location in the PDF
+9. Click the close button (×) in the top right of the overlay to minimize the panel
 
 **Good test PDFs**:
 - Academic papers

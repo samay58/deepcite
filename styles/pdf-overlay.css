@@ -1,61 +1,260 @@
 /* Global variables for consistent styling */
 :root {
-  /* Primary theme colors */
-  --primary-color: #4a90e2;
-  --primary-hover: #3a7dce;
+  /* Primary theme colors - updated for a modern look */
+  --primary-color: #2F80ED;
+  --primary-hover: #1A73E8;
   --secondary-color: #f8f9fa;
   
-  /* Confidence level colors */
-  --high-confidence: #28a745;
-  --medium-confidence: #ffc107;
-  --low-confidence: #dc3545;
+  /* Confidence level colors - more vibrant */
+  --high-confidence: #34C759;
+  --medium-confidence: #FF9500;
+  --low-confidence: #FF3B30;
   
-  /* Highlight colors */
-  --highlight-color: rgba(74, 144, 226, 0.15);
-  --highlight-hover: rgba(74, 144, 226, 0.25);
-  --highlight-border: rgba(74, 144, 226, 0.5);
+  /* Highlight colors - more elegant */
+  --highlight-color: rgba(47, 128, 237, 0.15);
+  --highlight-hover: rgba(47, 128, 237, 0.25);
+  --highlight-border: rgba(47, 128, 237, 0.5);
   
-  /* UI colors */
+  /* UI colors - refined */
   --tooltip-bg: white;
   --tooltip-border: #e0e0e0;
   --tooltip-shadow: rgba(0, 0, 0, 0.1);
-  --text-primary: #333;
-  --text-secondary: #666;
-  --text-muted: #888;
-  --divider-color: #eee;
+  --text-primary: #333333;
+  --text-secondary: #666666;
+  --text-muted: #888888;
+  --divider-color: #eeeeee;
   
   /* Sources */
-  --source-primary: #0066cc;
-  --source-bg: rgba(74, 144, 226, 0.05);
+  --source-primary: #007AFF;
+  --source-bg: rgba(47, 128, 237, 0.05);
   
-  /* Animations */
-  --transition-speed: 0.2s;
+  /* Animations - smoother */
+  --transition-speed: 0.25s;
   
   /* Loading */
-  --loading-color: #666;
+  --loading-color: #666666;
   
-  /* Font family */
+  /* Unified border radius */
+  --border-radius-sm: 6px;
+  --border-radius-md: 8px;
+  --border-radius-lg: 12px;
+  
+  /* Font family - system fonts for optimal performance */
   --font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-weight-normal: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
 }
 
 /* Dark mode support */
 @media (prefers-color-scheme: dark) {
   :root {
-    --tooltip-bg: #2d2d2d;
-    --tooltip-border: #404040;
+    --tooltip-bg: #222222;
+    --tooltip-border: #444444;
     --tooltip-shadow: rgba(0, 0, 0, 0.3);
-    --text-primary: #e0e0e0;
-    --text-secondary: #c0c0c0;
+    --text-primary: #f2f2f2;
+    --text-secondary: #d0d0d0;
     --text-muted: #a0a0a0;
-    --divider-color: #444;
-    --source-primary: #66b3ff;
-    --source-bg: rgba(74, 144, 226, 0.15);
-    --highlight-color: rgba(74, 144, 226, 0.25);
-    --highlight-hover: rgba(74, 144, 226, 0.35);
+    --divider-color: #444444;
+    --secondary-color: #333333;
+    
+    /* Adjust colors for dark mode */
+    --source-primary: #419CFF;
+    --source-bg: rgba(47, 128, 237, 0.15);
+    --highlight-color: rgba(47, 128, 237, 0.25);
+    --highlight-hover: rgba(47, 128, 237, 0.35);
+    
+    /* Keep confidence colors vibrant in dark mode */
+    --high-confidence: #32D74B;
+    --medium-confidence: #FF9F0A;
+    --low-confidence: #FF453A;
   }
 }
 
-/* PDF Overlay Styles */
+/* Unified Claims Overlay Styles */
+.deepcite-claims-overlay {
+  position: fixed;
+  right: 20px; /* Added margin from edge to avoid collision with site elements */
+  top: 20px;
+  width: 320px;
+  max-height: calc(100vh - 40px); /* Prevent extending beyond viewport */
+  background: var(--tooltip-bg);
+  box-shadow: -3px 0 20px var(--tooltip-shadow);
+  z-index: 9999;
+  padding: 20px;
+  overflow-y: auto;
+  font-family: var(--font-family);
+  border: 1px solid var(--tooltip-border);
+  border-radius: var(--border-radius-md);
+  color: var(--text-primary);
+  transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.3s ease-in-out, box-shadow 0.3s ease;
+  backdrop-filter: blur(5px);
+  resize: both; /* Allow user to resize the panel */
+  overflow: auto;
+  max-width: 90vw; /* Prevent extending beyond viewport width */
+  
+  /* Add an elegant fade-in animation */
+  animation: fadeInOverlay 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* Style for when panel is being dragged */
+.deepcite-claims-overlay.dragging {
+  opacity: 0.9;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+  transition: none; /* Disable transitions while dragging for better performance */
+  user-select: none;
+  outline: 2px dashed var(--primary-color);
+  outline-offset: 2px;
+}
+
+/* Fade-in animation for overlay */
+@keyframes fadeInOverlay {
+  0% { 
+    opacity: 0; 
+    transform: translateY(20px) scale(0.97);
+  }
+  100% { 
+    opacity: 1; 
+    transform: translateY(0) scale(1);
+  }
+}
+
+.deepcite-claims-overlay.minimized {
+  transform: scale(0.25) translate(75%, -75%);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
+  opacity: 0.85;
+  max-height: 60px;
+  overflow: hidden;
+  transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.4s ease-in-out, max-height 0.4s ease-in-out;
+}
+
+.deepcite-claims-overlay.minimized:hover {
+  opacity: 1;
+  transform: scale(0.3) translate(70%, -70%);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+}
+
+.deepcite-claims-overlay.minimized::before {
+  content: 'DeepCite';
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: bold;
+  font-size: 14px;
+  color: var(--primary-color);
+  background: var(--tooltip-bg);
+  padding: 4px;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.deepcite-claims-overlay.closed {
+  transform: scale(0) translate(100%, -100%);
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.3s ease-in-out, visibility 0s 0.3s;
+}
+
+.deepcite-overlay-close {
+  position: absolute;
+  top: 15px;
+  right: 15px;
+  width: 24px;
+  height: 24px;
+  background: var(--secondary-color);
+  border: 1px solid var(--divider-color);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+  color: var(--text-secondary);
+  z-index: 2;
+  transition: all var(--transition-speed) ease;
+}
+
+.deepcite-claims-overlay.minimized .deepcite-overlay-close {
+  right: 5px;
+  transform: rotate(180deg);
+  background: var(--primary-color);
+  color: white;
+  border-color: var(--primary-hover);
+  box-shadow: -2px 0 8px rgba(0, 0, 0, 0.2);
+}
+
+.deepcite-overlay-close:hover {
+  background: var(--highlight-hover);
+  color: var(--text-primary);
+}
+
+.deepcite-claims-header {
+  position: sticky;
+  top: 0;
+  background: var(--tooltip-bg);
+  padding: 12px 0 16px 0;
+  border-bottom: 2px solid var(--primary-color);
+  margin-bottom: 16px;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  cursor: move; /* Draggable indicator */
+}
+
+.deepcite-claims-header:after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 10px;
+  background: linear-gradient(to bottom, var(--tooltip-bg), transparent);
+  pointer-events: none;
+  opacity: 0.7;
+}
+
+.deepcite-claims-header h3 {
+  margin: 0 0 6px 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--primary-color);
+  display: flex;
+  align-items: center;
+}
+
+.deepcite-claims-header h3::before {
+  content: '';
+  display: inline-block;
+  width: 18px;
+  height: 18px;
+  margin-right: 8px;
+  background-color: var(--primary-color);
+  border-radius: 50%;
+  opacity: 0.8;
+}
+
+.deepcite-claims-header small {
+  color: var(--text-secondary);
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  margin-left: 26px; /* Align with the header text after the dot */
+  animation: pulse 2s infinite ease-in-out;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 0.7; }
+  50% { opacity: 1; }
+}
+
+/* Legacy PDF Overlay Styles (kept for backward compatibility) */
 .pdf-claims-overlay {
   position: fixed;
   right: 0;
@@ -93,21 +292,115 @@
   font-size: 13px;
 }
 
-.pdf-claim-item {
+.deepcite-claim-item, .pdf-claim-item {
   margin-bottom: 16px;
-  padding: 12px;
+  padding: 14px;
   border: 1px solid var(--divider-color);
-  border-radius: 8px;
-  transition: all var(--transition-speed) ease;
+  border-radius: var(--border-radius-md);
+  transition: all var(--transition-speed) cubic-bezier(0.16, 1, 0.3, 1);
   cursor: pointer;
   background-color: var(--secondary-color);
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.03);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
+  position: relative;
+  overflow: hidden;
+  animation: claimItemFadeIn 0.5s cubic-bezier(0.16, 1, 0.3, 1) backwards;
 }
 
-.pdf-claim-item:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.06);
+/* Staggered animation for claim items */
+@keyframes claimItemFadeIn {
+  0% {
+    opacity: 0;
+    transform: translateY(15px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Apply staggered delay to items */
+.deepcite-claim-item:nth-child(1), .pdf-claim-item:nth-child(1) { animation-delay: 0.1s; }
+.deepcite-claim-item:nth-child(2), .pdf-claim-item:nth-child(2) { animation-delay: 0.15s; }
+.deepcite-claim-item:nth-child(3), .pdf-claim-item:nth-child(3) { animation-delay: 0.2s; }
+.deepcite-claim-item:nth-child(4), .pdf-claim-item:nth-child(4) { animation-delay: 0.25s; }
+.deepcite-claim-item:nth-child(5), .pdf-claim-item:nth-child(5) { animation-delay: 0.3s; }
+.deepcite-claim-item:nth-child(n+6), .pdf-claim-item:nth-child(n+6) { animation-delay: 0.35s; }
+
+.deepcite-claim-item:hover, .pdf-claim-item:hover {
+  transform: translateY(-2px) scale(1.01);
+  box-shadow: 0 6px 12px rgba(0, 0, 0, 0.08);
   border-color: var(--primary-color);
+}
+
+.deepcite-claim-item::before, .pdf-claim-item::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  height: 100%;
+  width: 4px;
+  background: var(--primary-color);
+  opacity: 0;
+  transition: opacity var(--transition-speed) ease;
+}
+
+.deepcite-claim-item:hover::before, .pdf-claim-item:hover::before {
+  opacity: 1;
+}
+
+.deepcite-claim-text {
+  margin-bottom: 8px;
+  line-height: 1.4;
+}
+
+.deepcite-claim-confidence {
+  margin-top: 6px;
+  margin-bottom: 8px;
+  font-size: 13px;
+  padding: 6px;
+  background: var(--source-bg);
+  border-radius: 6px;
+}
+
+.deepcite-claim-sources {
+  margin-top: 10px;
+  background: var(--source-bg);
+  padding: 10px;
+  border-radius: 6px;
+}
+
+.deepcite-claim-sources-header {
+  font-weight: 600;
+  margin-bottom: 8px;
+  font-size: 14px;
+}
+
+.deepcite-claim-source-item {
+  margin-bottom: 8px;
+}
+
+.deepcite-source-title a {
+  color: var(--source-primary);
+  text-decoration: none;
+}
+
+.deepcite-source-title a:hover {
+  text-decoration: underline;
+}
+
+.deepcite-source-confidence {
+  margin-left: 6px;
+  font-size: 12px;
+  background: var(--source-bg);
+  padding: 2px 6px;
+  border-radius: 4px;
+  color: var(--text-secondary);
+}
+
+.deepcite-source-divider {
+  margin: 10px 0;
+  border: 0;
+  border-top: 1px solid var(--divider-color);
 }
 
 .pdf-claim-location {
@@ -183,37 +476,79 @@
 .analyze-pdf-button, .analyze-webpage-button {
   position: fixed;
   right: 20px;
-  padding: 10px 16px;
+  padding: 12px 20px;
   background: var(--primary-color);
   color: white;
   border: none;
-  border-radius: 8px;
+  border-radius: var(--border-radius-md);
   cursor: pointer;
   z-index: 10000;
   font-family: var(--font-family);
   font-size: 14px;
-  font-weight: 500;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
-  transition: all var(--transition-speed) ease;
+  font-weight: var(--font-weight-medium);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  transition: all var(--transition-speed) cubic-bezier(0.16, 1, 0.3, 1);
+  letter-spacing: 0.2px;
+  animation: buttonFadeIn 0.5s cubic-bezier(0.16, 1, 0.3, 1) backwards;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+@keyframes buttonFadeIn {
+  0% {
+    opacity: 0;
+    transform: scale(0.9) translateY(10px);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
 }
 
 .analyze-pdf-button {
   top: 20px;
+  animation-delay: 0.1s;
+}
+
+.analyze-pdf-button::before {
+  content: '📄';
+  margin-right: 8px;
+  font-size: 16px;
 }
 
 .analyze-webpage-button {
-  top: 60px;
+  top: 80px;
+  animation-delay: 0.2s;
+}
+
+.analyze-webpage-button::before {
+  content: '🔍';
+  margin-right: 8px;
+  font-size: 16px;
 }
 
 .analyze-pdf-button:hover, .analyze-webpage-button:hover {
   background: var(--primary-hover);
-  transform: translateY(-1px);
-  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+  transform: translateY(-3px) scale(1.03);
+  box-shadow: 0 8px 16px rgba(0, 0, 0, 0.2);
+}
+
+.analyze-pdf-button:active, .analyze-webpage-button:active {
+  transform: translateY(1px) scale(0.98);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.15);
 }
 
 .analyze-pdf-button:disabled, .analyze-webpage-button:disabled {
   opacity: 0.7;
   cursor: not-allowed;
+  transform: none;
+  animation: processingPulse 1.5s infinite ease-in-out;
+}
+
+@keyframes processingPulse {
+  0%, 100% { background-color: var(--primary-color); }
+  50% { background-color: var(--primary-hover); }
 }
 
 /* Web Highlights and Tooltips */
@@ -224,34 +559,45 @@
   display: inline !important;
   padding: 2px 0 !important;
   position: relative !important;
-  transition: all var(--transition-speed) ease !important;
+  transition: all var(--transition-speed) cubic-bezier(0.16, 1, 0.3, 1) !important;
+  border-radius: 2px !important;
+  text-decoration: none !important;
 }
 
 .exa-claim-highlight:hover {
   background-color: var(--highlight-hover) !important;
+  transform: translateY(-1px) !important;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05) !important;
 }
 
 .exa-tooltip {
   position: fixed !important;
   background: var(--tooltip-bg) !important;
   border: 1px solid var(--tooltip-border) !important;
-  box-shadow: 0 4px 15px var(--tooltip-shadow) !important;
-  padding: 12px 16px !important;
-  border-radius: 8px !important;
+  box-shadow: 0 8px 24px var(--tooltip-shadow) !important;
+  padding: 14px 18px !important;
+  border-radius: var(--border-radius-md) !important;
   font-size: 14px !important;
   max-width: 320px !important;
   z-index: 999999 !important;
   color: var(--text-primary) !important;
-  backdrop-filter: blur(8px) !important;
+  backdrop-filter: blur(10px) !important;
   transform: translateY(8px) !important;
   opacity: 0 !important;
-  transition: opacity var(--transition-speed), transform var(--transition-speed) !important;
+  transition: opacity var(--transition-speed), transform var(--transition-speed) cubic-bezier(0.16, 1, 0.3, 1) !important;
   font-family: var(--font-family) !important;
+  line-height: 1.5 !important;
 }
 
 .exa-tooltip.visible {
   opacity: 1 !important;
   transform: translateY(0) !important;
+  animation: tooltipAppear 0.25s cubic-bezier(0.16, 1, 0.3, 1) !important;
+}
+
+@keyframes tooltipAppear {
+  0% { transform: translateY(8px) scale(0.95); opacity: 0; }
+  100% { transform: translateY(0) scale(1); opacity: 1; }
 }
 
 .exa-tooltip::before {
@@ -362,6 +708,54 @@
   color: var(--text-secondary) !important;
 }
 
+/* Confidence meter styling */
+.confidence-meter {
+  display: inline-block !important;
+  height: 8px !important;
+  border-radius: 4px !important;
+  margin: 0 6px !important;
+  vertical-align: middle !important;
+  min-width: 20px !important;
+  max-width: 100px !important;
+  transition: width 0.3s ease-in-out !important;
+}
+
+.confidence-text {
+  font-weight: 500 !important;
+  margin-left: 4px !important;
+  vertical-align: middle !important;
+}
+
+/* Animation for highlight flash - enhanced for better visibility */
+@keyframes highlightFlash {
+  0% { 
+    background-color: var(--highlight-color);
+    box-shadow: 0 0 0 rgba(47, 128, 237, 0);
+  }
+  15% { 
+    background-color: var(--primary-color);
+    color: white; 
+    box-shadow: 0 0 15px rgba(47, 128, 237, 0.7);
+    transform: scale(1.03);
+  }
+  40% { 
+    background-color: var(--primary-color);
+    color: white;
+    box-shadow: 0 0 8px rgba(47, 128, 237, 0.4);
+    transform: scale(1.01);
+  }
+  100% { 
+    background-color: var(--highlight-color);
+    box-shadow: 0 0 0 rgba(47, 128, 237, 0);
+    transform: scale(1);
+  }
+}
+
+.exa-claim-highlight-flash {
+  animation: highlightFlash 2s cubic-bezier(0.16, 1, 0.3, 1);
+  z-index: 1000 !important; /* Make sure flashing highlight is visible */
+}
+
 /* Animation for loading spinner */
 @keyframes spin {
   to { transform: rotate(360deg); }
@@ -375,4 +769,30 @@
   border-top-color: transparent !important;
   border-radius: 50% !important;
   animation: spin 1s linear infinite !important;
+}
+
+/* Styling for DeepCite badge */
+.deepcite-badge {
+  display: inline-block !important;
+  background-color: var(--primary-color) !important;
+  color: white !important;
+  padding: 3px 8px !important;
+  border-radius: 4px !important;
+  font-size: 14px !important;
+  font-weight: bold !important;
+  margin-left: 8px !important;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2) !important;
+  letter-spacing: 0.5px !important;
+  position: relative !important;
+  z-index: 99999 !important; /* Make sure badge is always on top */
+  user-select: none !important;
+  cursor: pointer !important;
+  transition: all 0.2s ease !important;
+  font-family: var(--font-family) !important;
+}
+
+.deepcite-badge:hover {
+  background-color: var(--primary-hover) !important;
+  transform: translateY(-1px) !important;
+  box-shadow: 0 3px 6px rgba(0, 0, 0, 0.25) !important;
 }

@@ -15,6 +15,17 @@ The main codebase consists of:
 - **options.html/ts** - Settings page (future functionality)
 - **styles/pdf-overlay.css** - Styling for the extension
 
+## Recent Improvements
+
+We've made several enhancements to the extension:
+
+1. **Manual Activation** - Analysis now only runs when the user explicitly clicks the "Analyze Webpage" or "Analyze PDF" button
+2. **Fact Certainty Filtering** - Only claims with a fact certainty score above 40% are highlighted and displayed
+3. **Visual Certainty Indicators** - Added visual meters to show the confidence score for each claim
+4. **Unified Claims Panel** - Added a consistent side panel for both web pages and PDFs that shows all detected claims
+5. **Modern UI** - Refreshed the visual design with more elegant animations, color scheme, and interactions
+6. **Interactive Navigation** - Claims in the panel can be clicked to navigate to their location in the text
+
 ## How to Test
 
 Please refer to `docs/TESTING.md` for detailed instructions on testing the extension.

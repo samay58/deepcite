@@ -82,16 +82,20 @@ npm run build
 - `manifest.json`: Extension configuration and permissions
 
 ### API Keys
-The extension relies on two API services:
+The extension relies on two API services that need your own API keys:
 
 1. **Exa API**: Used for retrieving source information for claims
-   - Currently using a hardcoded demo key in `background.ts` (for development only)
+   - You need to add your Exa API key in `background.ts` (replace "EXA-API-KEY-GOES-HERE")
+   - Create an account at https://exa.ai to get your API key
    - Will be moved to the options page in a future update
 
 2. **OpenAI API**: Used for improved claim detection and confidence scoring
-   - Currently using a hardcoded key for demonstration
-   - The extension will fall back to rule-based detection if the key is invalid or unavailable
+   - You need to add your OpenAI API key in `background.ts` (replace "OPENAI-API-KEY-GOES-HERE")
+   - Create an account at https://platform.openai.com to get your API key
+   - The extension will fall back to rule-based detection if the key is invalid
    - Will be configurable in the options page in a future update
+
+**Important:** Never commit API keys to version control. The placeholders in the code must be replaced with real keys locally for testing.
 
 ### Building 
 

@@ -3,6 +3,12 @@
  * Extracts factual claims from text using OpenAI's GPT-4
  * This provides more accurate claim detection than rule-based approaches
  * and includes confidence scoring for each claim
+ *
+ * Enhanced with improved prompting to:
+ * - Filter out subjective, speculative, and opinion-based statements
+ * - Focus on verifiable claims with specific data and evidence
+ * - Assess confidence based on factual clarity and specificity
+ * - Prioritize claims that reference research, measurements, or established facts
  */
 // Make the class global for content script access
 const LLMExtractor = class {
@@ -16,6 +22,14 @@ const LLMExtractor = class {
     }
     async extractClaimsFromChunk(text) {
         try {
+            if (!this.apiKey || this.apiKey === '') {
+                throw new Error('OpenAI API key not provided or empty');
+            }
+            // Validate API key format (should be a non-empty string starting with 'sk-')
+            if (!this.apiKey.startsWith('sk-')) {
+                throw new Error('Invalid OpenAI API key format');
+            }
+            console.log('Sending request to OpenAI API...');
             const response = await fetch('https://api.openai.com/v1/chat/completions', {
                 method: 'POST',
                 headers: {
@@ -28,8 +42,30 @@ const LLMExtractor = class {
                             role: 'system',
                             content: `Extract factual claims from the text. Return a JSON array where each item has:
               - claim: The exact claim text
-              - confidence: 0-1 score of how clearly it's a factual claim
-              Only include clear, verifiable claims. Ignore opinions and subjective statements.`
+              - confidence: 0-1 score of how clearly it's a factual claim (0.9+ for very clear factual claims with specific data, 0.7-0.9 for likely factual claims, below 0.7 for statements that might be factual but lack specificity)
+              
+              Only include clear, verifiable claims that could be fact-checked against reliable sources.
+              
+              EXCLUDE the following types of statements:
+              - Opinions, subjective judgments, or matters of taste
+              - Speculative statements containing "might," "may," "could," "possibly," etc.
+              - Value judgments containing "good," "bad," "best," "worst," etc.
+              - Relative or comparative claims without specific metrics
+              - Personal beliefs starting with "I think," "I believe," etc.
+              - Questions or hypotheticals
+              - Future predictions
+              - Claims about intentions or motivations
+              - General claims without specificity
+              
+              INCLUDE statements that:
+              - Contain specific numbers, dates, statistics, or measurements
+              - Reference research, studies, or specific published findings
+              - Make clear cause-effect assertions based on evidence
+              - Describe specific historical events, discoveries, or observations
+              - Reference specific organizations, people, or places in relation to verifiable actions
+              - Make definitive statements about established processes or systems
+              
+              Prioritize precision, specificity, and verifiability in your selection.`
                         }, {
                             role: 'user',
                             content: text
@@ -41,12 +77,43 @@ const LLMExtractor = class {
                 throw new Error(`OpenAI API error: ${response.status}`);
             }
             const data = await response.json();
+            if (!data || !data.choices || !data.choices[0] || !data.choices[0].message || !data.choices[0].message.content) {
+                throw new Error('Invalid response format from OpenAI API');
+            }
             const claims = data.choices[0].message.content;
-            const parsed = JSON.parse(claims);
-            return {
-                claims: parsed.map((p) => p.claim),
-                confidence: parsed.map((p) => p.confidence)
-            };
+            try {
+                const parsed = JSON.parse(claims);
+                if (!Array.isArray(parsed)) {
+                    throw new Error('Expected JSON array in response');
+                }
+                return {
+                    claims: parsed.map((p) => p.claim),
+                    confidence: parsed.map((p) => p.confidence)
+                };
+            }
+            catch (parseError) {
+                console.error('Failed to parse OpenAI response as JSON:', parseError);
+                // Try to extract claims with regex as fallback
+                const claimMatches = claims.match(/claim["\s:]+([^"]+)/gi);
+                const confidenceMatches = claims.match(/confidence["\s:]+([0-9.]+)/gi);
+                if (claimMatches) {
+                    const extractedClaims = claimMatches.map((m) => {
+                        const match = m.match(/claim["\s:]+(.+)/i);
+                        return match ? match[1].trim() : '';
+                    }).filter((c) => c);
+                    const extractedConfidences = confidenceMatches ? confidenceMatches.map((m) => {
+                        const match = m.match(/confidence["\s:]+([0-9.]+)/i);
+                        return match ? parseFloat(match[1]) : 0.5;
+                    }) : extractedClaims.map(() => 0.5);
+                    if (extractedClaims.length > 0) {
+                        return {
+                            claims: extractedClaims,
+                            confidence: extractedConfidences
+                        };
+                    }
+                }
+                throw new Error('Failed to parse claims from OpenAI response');
+            }
         }
         catch (error) {
             console.error('LLM extraction failed:', error);

@@ -1,25 +1,29 @@
 # Athena DeepCite Development Guide
 
 ## Build & Development Commands
-- Build: `npm run build` (compiles TS to JS)
+- Build: `npm run build` (compiles TS to JS in dist/)
+- Lint: `npm run lint` (runs ESLint checks)
 - Install dependencies: `npm install`
 - Load extension: Load unpacked from `chrome://extensions/` (dev mode enabled)
-- After changes: Run build and refresh extension in Chrome
+- After code changes: Run build and refresh extension in Chrome
+- Debug: Check Chrome console for logs in background/content script contexts
 
 ## Code Style Guidelines
-- TypeScript with strict typing, defining interfaces for all data structures
-- Interfaces defined in `types.ts` when shared between files
-- Error handling with try/catch blocks and console.error for logging
-- Asynchronous code using async/await pattern
-- Class-based components with private/public method designation
-- Prefer const over let, avoid var
-- 2-space indentation, single quotes for strings
+- TypeScript with strict typing (`strict: true` in tsconfig.json)
+- API keys should be managed via options.html, not hardcoded
+- Interfaces defined in `types.ts` for shared data structures
+- 2-space indentation, Unix line endings, single quotes (ESLint enforced)
 - Use camelCase for variables/functions, PascalCase for classes/interfaces
-- Comments for complex logic and public method documentation
-- Avoid hardcoded values (except during development)
+- Error handling: try/catch with console.error for logging
+- Async: Use async/await pattern rather than raw promises
+- API calls: Check for API keys before making requests
+- Keep components modular with clear separation of concerns
+- Add detailed comments for complex logic and public methods
 
 ## Extension Architecture
-- Content script: DOM interactions, UI management (contentScript.ts)
-- Background script: API calls, message handling (background.ts)
+- Content script: DOM interactions, UI management (`contentScript.ts`)
+- Background script: API calls, message handling (`background.ts`)
+- LLM Extractor: Handles OpenAI API interactions (`llmExtractor.ts`)
+- Options page: Manages user settings and API keys (`options.ts`)
 - PDF handling via pdf.js library
 - Message passing between scripts with chrome.runtime.sendMessage

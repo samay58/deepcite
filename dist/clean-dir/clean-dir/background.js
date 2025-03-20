@@ -4,21 +4,16 @@ console.log('Background service worker starting...');
 // Basic background service worker
 chrome.runtime.onInstalled.addListener(() => {
     console.log('Extension installed');
-    // Set default settings if not already set
-    chrome.storage.local.get(['openaiKey', 'exaKey'], (result) => {
-        const defaults = {};
-        if (!result.openaiKey) {
-            defaults['openaiKey'] = '';
-        }
-        if (!result.exaKey) {
-            defaults['exaKey'] = '';
-        }
-        if (Object.keys(defaults).length > 0) {
-            chrome.storage.local.set(defaults);
-        }
+    // Store the OpenAI key for LLM-based claim extraction
+    // TODO: In the future, this will be configured by the user in options.html
+    // The extension will fall back to rule-based extraction if this key is invalid
+    chrome.storage.local.set({
+        openAiKey: 'OPENAI-API-KEY-GOES-HERE' // Development key placeholder - replace with actual key during testing
     });
 });
-// The Exa API key will be retrieved from storage in the verifyClaimWithExa function
+// Exa API configuration for source verification
+// TODO: Move to user-configurable storage in future version
+const EXA_API_KEY = 'EXA-API-KEY-GOES-HERE'; // Development key placeholder - replace with actual key during testing
 const EXA_API_URL = 'https://api.exa.ai/search';
 /**
  * Verify a claim using Exa's API to find supporting sources
@@ -29,19 +24,13 @@ const EXA_API_URL = 'https://api.exa.ai/search';
  */
 async function verifyClaimWithExa(claim) {
     try {
-        // Get the API key from storage
-        const result = await chrome.storage.local.get(['exaKey']);
-        const exaKey = result.exaKey;
-        if (!exaKey) {
-            throw new Error('Exa API key not found. Please set it in the extension options.');
-        }
         // Send the claim to Exa API as a neural search query
         // This uses semantic understanding rather than just keyword matching
         const response = await fetch(EXA_API_URL, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                'Authorization': `Bearer ${exaKey}`
+                'Authorization': `Bearer ${EXA_API_KEY}`
             },
             body: JSON.stringify({
                 query: claim,
