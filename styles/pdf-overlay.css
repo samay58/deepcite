@@ -1,0 +1,378 @@
+/* Global variables for consistent styling */
+:root {
+  /* Primary theme colors */
+  --primary-color: #4a90e2;
+  --primary-hover: #3a7dce;
+  --secondary-color: #f8f9fa;
+  
+  /* Confidence level colors */
+  --high-confidence: #28a745;
+  --medium-confidence: #ffc107;
+  --low-confidence: #dc3545;
+  
+  /* Highlight colors */
+  --highlight-color: rgba(74, 144, 226, 0.15);
+  --highlight-hover: rgba(74, 144, 226, 0.25);
+  --highlight-border: rgba(74, 144, 226, 0.5);
+  
+  /* UI colors */
+  --tooltip-bg: white;
+  --tooltip-border: #e0e0e0;
+  --tooltip-shadow: rgba(0, 0, 0, 0.1);
+  --text-primary: #333;
+  --text-secondary: #666;
+  --text-muted: #888;
+  --divider-color: #eee;
+  
+  /* Sources */
+  --source-primary: #0066cc;
+  --source-bg: rgba(74, 144, 226, 0.05);
+  
+  /* Animations */
+  --transition-speed: 0.2s;
+  
+  /* Loading */
+  --loading-color: #666;
+  
+  /* Font family */
+  --font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+/* Dark mode support */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --tooltip-bg: #2d2d2d;
+    --tooltip-border: #404040;
+    --tooltip-shadow: rgba(0, 0, 0, 0.3);
+    --text-primary: #e0e0e0;
+    --text-secondary: #c0c0c0;
+    --text-muted: #a0a0a0;
+    --divider-color: #444;
+    --source-primary: #66b3ff;
+    --source-bg: rgba(74, 144, 226, 0.15);
+    --highlight-color: rgba(74, 144, 226, 0.25);
+    --highlight-hover: rgba(74, 144, 226, 0.35);
+  }
+}
+
+/* PDF Overlay Styles */
+.pdf-claims-overlay {
+  position: fixed;
+  right: 0;
+  top: 0;
+  width: 320px;
+  height: 100vh;
+  background: var(--tooltip-bg);
+  box-shadow: -2px 0 15px var(--tooltip-shadow);
+  z-index: 9999;
+  padding: 20px;
+  overflow-y: auto;
+  font-family: var(--font-family);
+  border-left: 1px solid var(--tooltip-border);
+  color: var(--text-primary);
+}
+
+.pdf-claims-header {
+  position: sticky;
+  top: 0;
+  background: var(--tooltip-bg);
+  padding: 12px 0;
+  border-bottom: 1px solid var(--divider-color);
+  margin-bottom: 16px;
+}
+
+.pdf-claims-header h3 {
+  margin: 0 0 4px 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.pdf-claims-header small {
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.pdf-claim-item {
+  margin-bottom: 16px;
+  padding: 12px;
+  border: 1px solid var(--divider-color);
+  border-radius: 8px;
+  transition: all var(--transition-speed) ease;
+  cursor: pointer;
+  background-color: var(--secondary-color);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.03);
+}
+
+.pdf-claim-item:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.06);
+  border-color: var(--primary-color);
+}
+
+.pdf-claim-location {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+  display: inline-block;
+  background: var(--source-bg);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.pdf-claim-confidence {
+  margin-top: 6px;
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+
+.pdf-claim-sources {
+  margin-top: 10px;
+  background: var(--source-bg);
+  padding: 10px;
+  border-radius: 6px;
+}
+
+.pdf-claim-sources-header {
+  font-weight: 600;
+  margin-bottom: 8px;
+  font-size: 14px;
+  color: var(--text-primary);
+}
+
+.pdf-claim-source-item {
+  margin-bottom: 8px;
+  transition: all var(--transition-speed) ease;
+}
+
+.pdf-claim-source-item:hover {
+  transform: translateX(2px);
+}
+
+.pdf-source-title {
+  font-weight: 500;
+  margin-bottom: 4px;
+}
+
+.pdf-source-title a {
+  color: var(--source-primary);
+  text-decoration: none;
+  transition: color var(--transition-speed) ease;
+}
+
+.pdf-source-title a:hover {
+  text-decoration: underline;
+}
+
+.pdf-source-confidence {
+  margin-left: 6px;
+  font-size: 12px;
+  background: var(--source-bg);
+  padding: 2px 6px;
+  border-radius: 4px;
+  color: var(--text-secondary);
+}
+
+.pdf-source-divider {
+  margin: 10px 0;
+  border: 0;
+  border-top: 1px solid var(--divider-color);
+}
+
+/* Buttons */
+.analyze-pdf-button, .analyze-webpage-button {
+  position: fixed;
+  right: 20px;
+  padding: 10px 16px;
+  background: var(--primary-color);
+  color: white;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  z-index: 10000;
+  font-family: var(--font-family);
+  font-size: 14px;
+  font-weight: 500;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+  transition: all var(--transition-speed) ease;
+}
+
+.analyze-pdf-button {
+  top: 20px;
+}
+
+.analyze-webpage-button {
+  top: 60px;
+}
+
+.analyze-pdf-button:hover, .analyze-webpage-button:hover {
+  background: var(--primary-hover);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+}
+
+.analyze-pdf-button:disabled, .analyze-webpage-button:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+/* Web Highlights and Tooltips */
+.exa-claim-highlight {
+  background-color: var(--highlight-color) !important;
+  border-bottom: 2px solid var(--highlight-border) !important;
+  cursor: pointer !important;
+  display: inline !important;
+  padding: 2px 0 !important;
+  position: relative !important;
+  transition: all var(--transition-speed) ease !important;
+}
+
+.exa-claim-highlight:hover {
+  background-color: var(--highlight-hover) !important;
+}
+
+.exa-tooltip {
+  position: fixed !important;
+  background: var(--tooltip-bg) !important;
+  border: 1px solid var(--tooltip-border) !important;
+  box-shadow: 0 4px 15px var(--tooltip-shadow) !important;
+  padding: 12px 16px !important;
+  border-radius: 8px !important;
+  font-size: 14px !important;
+  max-width: 320px !important;
+  z-index: 999999 !important;
+  color: var(--text-primary) !important;
+  backdrop-filter: blur(8px) !important;
+  transform: translateY(8px) !important;
+  opacity: 0 !important;
+  transition: opacity var(--transition-speed), transform var(--transition-speed) !important;
+  font-family: var(--font-family) !important;
+}
+
+.exa-tooltip.visible {
+  opacity: 1 !important;
+  transform: translateY(0) !important;
+}
+
+.exa-tooltip::before {
+  content: '' !important;
+  position: absolute !important;
+  top: -6px !important;
+  left: 20px !important;
+  width: 12px !important;
+  height: 12px !important;
+  background: var(--tooltip-bg) !important;
+  border-left: 1px solid var(--tooltip-border) !important;
+  border-top: 1px solid var(--tooltip-border) !important;
+  transform: rotate(45deg) !important;
+}
+
+.exa-tooltip a {
+  color: var(--source-primary) !important;
+  text-decoration: none !important;
+  cursor: pointer !important;
+  transition: all var(--transition-speed) ease !important;
+}
+
+.exa-tooltip a:hover {
+  text-decoration: underline !important;
+}
+
+.exa-tooltip-header {
+  display: flex !important;
+  align-items: center !important;
+  margin-bottom: 8px !important;
+}
+
+.exa-tooltip-favicon {
+  width: 16px !important;
+  height: 16px !important;
+  margin-right: 8px !important;
+  border-radius: 2px !important;
+}
+
+.exa-tooltip-source {
+  margin-bottom: 10px !important;
+  padding: 6px !important;
+  border-radius: 6px !important;
+  transition: background 0.2s !important;
+}
+
+.exa-tooltip-source:hover {
+  background: var(--source-bg) !important;
+}
+
+.exa-tooltip-source-header {
+  display: flex !important;
+  align-items: center !important;
+  margin-bottom: 6px !important;
+}
+
+.exa-sources-header {
+  font-weight: 600 !important;
+  margin-bottom: 10px !important;
+  color: var(--text-primary) !important;
+}
+
+.exa-claim-confidence {
+  margin-bottom: 10px !important;
+  padding: 6px 8px !important;
+  background: var(--source-bg) !important;
+  border-radius: 6px !important;
+  font-size: 13px !important;
+}
+
+.exa-tooltip-nav {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  margin-top: 10px !important;
+  padding-top: 8px !important;
+  border-top: 1px solid var(--divider-color) !important;
+}
+
+.exa-tooltip-nav button {
+  background: var(--secondary-color) !important;
+  border: 1px solid var(--divider-color) !important;
+  color: var(--text-primary) !important;
+  cursor: pointer !important;
+  padding: 4px 10px !important;
+  border-radius: 6px !important;
+  transition: all var(--transition-speed) ease !important;
+  font-family: var(--font-family) !important;
+}
+
+.exa-tooltip-nav button:hover:not(:disabled) {
+  background: var(--highlight-color) !important;
+  border-color: var(--primary-color) !important;
+}
+
+.exa-tooltip-nav button:disabled {
+  opacity: 0.5 !important;
+  cursor: not-allowed !important;
+}
+
+.exa-source-confidence {
+  display: inline-block !important;
+  padding: 2px 6px !important;
+  background: var(--source-bg) !important;
+  border-radius: 4px !important;
+  font-size: 12px !important;
+  margin-left: 8px !important;
+  color: var(--text-secondary) !important;
+}
+
+/* Animation for loading spinner */
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.exa-loading {
+  display: inline-block !important;
+  width: 16px !important;
+  height: 16px !important;
+  border: 2px solid var(--loading-color) !important;
+  border-top-color: transparent !important;
+  border-radius: 50% !important;
+  animation: spin 1s linear infinite !important;
+}

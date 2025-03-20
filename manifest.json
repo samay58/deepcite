@@ -1,0 +1,42 @@
+{
+  "manifest_version": 3,
+  "name": "Deep Research Citation Verifier",
+  "version": "1.0.0",
+  "description": "Verifies factual claims in documents using Exa's API and overlays citations",
+  "permissions": [
+    "storage",
+    "activeTab",
+    "webRequest"
+  ],
+  "host_permissions": [
+    "https://api.exa.ai/*",
+    "https://api.openai.com/*",
+    "<all_urls>"
+  ],
+  "web_accessible_resources": [{
+    "resources": ["pdf.worker.min.js", "styles/pdf-overlay.css"],
+    "matches": ["<all_urls>"]
+  }],
+  "background": {
+    "service_worker": "dist/background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "<all_urls>",
+        "file://*/*.pdf",
+        "https://*/*.pdf"
+      ],
+      "js": [
+        "lib/pdf.min.js",
+        "dist/llmExtractor.js",
+        "dist/contentScript.js"
+      ],
+      "css": ["styles/pdf-overlay.css"]
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "options_page": "options.html"
+} 

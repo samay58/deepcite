@@ -1,0 +1,23 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "CommonJS",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "outDir": "dist",
+    "moduleResolution": "node",
+    "baseUrl": ".",
+    "paths": {
+      "@handlers/*": ["src/handlers/*"],
+      "@extractors/*": ["src/extractors/*"],
+      "@utils/*": ["src/utils/*"],
+      "@types": ["src/types"]
+    },
+    // Commented out rootDir to allow files in their original locations
+    // "rootDir": "src"
+  },
+  "include": ["./**/*.ts"],
+  "exclude": ["node_modules"]
+}

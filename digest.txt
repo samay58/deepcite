@@ -1,0 +1,2557 @@
+Directory structure:
+└── /./
+    ├── llmExtractor.ts
+    ├── contentScript.ts
+    ├── docs/
+    │   ├── TESTING.md
+    │   ├── README.md
+    │   ├── CURRENT_STATUS.md
+    │   ├── IMPLEMENTATION_PLAN.md
+    │   └── REFACTORING.md
+    ├── README.md
+    ├── types.ts
+    ├── styles/
+    │   └── pdf-overlay.css
+    ├── background.ts
+    ├── package.json
+    ├── manifest.json
+    ├── lib/
+    ├── tsconfig.json
+    ├── options.html
+    ├── eslint.config.js
+    ├── CLAUDE.md
+    ├── options.ts
+    └── REFACTORING.md
+
+================================================
+File: /llmExtractor.ts
+================================================
+/**
+ * Interface for LLM extraction results containing claims and confidence scores
+ */
+interface LLMExtractionResult {
+  claims: string[];         // Array of extracted factual claims
+  confidence: number[];     // Corresponding confidence scores (0-1)
+}
+
+/**
+ * Extracts factual claims from text using OpenAI's GPT-4
+ * This provides more accurate claim detection than rule-based approaches
+ * and includes confidence scoring for each claim
+ */
+// Make the class global for content script access
+const LLMExtractor = class {
+  private apiKey: string;
+  private maxTokens = 4000; // GPT-4 context window limit
+  
+  /**
+   * Initialize the extractor with an OpenAI API key
+   * @param apiKey - OpenAI API key
+   */
+  constructor(apiKey: string) {
+    this.apiKey = apiKey;
+  }
+
+  private async extractClaimsFromChunk(text: string): Promise<LLMExtractionResult> {
+    try {
+      const response = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${this.apiKey}`
+        },
+        body: JSON.stringify({
+          model: 'gpt-4',
+          messages: [{
+            role: 'system',
+            content: `Extract factual claims from the text. Return a JSON array where each item has:
+              - claim: The exact claim text
+              - confidence: 0-1 score of how clearly it's a factual claim
+              Only include clear, verifiable claims. Ignore opinions and subjective statements.`
+          }, {
+            role: 'user',
+            content: text
+          }],
+          temperature: 0.1
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`OpenAI API error: ${response.status}`);
+      }
+
+      const data = await response.json();
+      const claims = data.choices[0].message.content;
+      const parsed = JSON.parse(claims);
+      
+      return {
+        claims: parsed.map((p: any) => p.claim),
+        confidence: parsed.map((p: any) => p.confidence)
+      };
+    } catch (error) {
+      console.error('LLM extraction failed:', error);
+      return { claims: [], confidence: [] };
+    }
+  }
+
+  private chunkText(text: string, maxLength: number = 3000): string[] {
+    // Split into paragraphs
+    const paragraphs = text.split(/\n\s*\n/);
+    const chunks: string[] = [];
+    let currentChunk = '';
+
+    for (const paragraph of paragraphs) {
+      if ((currentChunk + paragraph).length > maxLength) {
+        if (currentChunk) chunks.push(currentChunk);
+        currentChunk = paragraph;
+      } else {
+        currentChunk += (currentChunk ? '\n\n' : '') + paragraph;
+      }
+    }
+    if (currentChunk) chunks.push(currentChunk);
+    return chunks;
+  }
+
+  /**
+   * Extract factual claims from text with confidence scores
+   * Handles large texts by chunking and processing in parallel
+   * 
+   * @param text - The text to analyze for factual claims
+   * @returns Promise resolving to claims and confidence scores
+   */
+  public async extractClaims(text: string): Promise<LLMExtractionResult> {
+    // Split large text into manageable chunks to fit within token limits
+    const chunks = this.chunkText(text);
+    
+    // Process all chunks in parallel for better performance
+    const results = await Promise.all(
+      chunks.map(chunk => this.extractClaimsFromChunk(chunk))
+    );
+
+    // Merge results from all chunks into a single result
+    return {
+      claims: results.flatMap(r => r.claims),
+      confidence: results.flatMap(r => r.confidence)
+    };
+  }
+}
+
+================================================
+File: /contentScript.ts
+================================================
+// Declare PDF.js types
+declare const pdfjsLib: {
+  getDocument: (url: string) => { promise: Promise<any> };
+  GlobalWorkerOptions: { workerSrc: string };
+};
+
+// We'll use our own LLMExtractionResult interface and directly reference the LLMExtractor class
+// from llmExtractor.ts (which will be loaded via script tag in manifest.json)
+interface LLMExtractionResult {
+  claims: string[];
+  confidence: number[];
+}
+
+// No need to redeclare LLMExtractor here since it will be loaded from llmExtractor.js
+
+// Define types inline since we can't use modules in content scripts
+interface Claim {
+  id: number;
+  text: string;
+  cleanText: string;
+  context: {
+    page: number;
+    paragraph: number;
+  };
+  relevance: number;
+  confidence?: number; // Added confidence score from LLM
+}
+
+interface ClaimDetectionResult {
+  claims: Claim[];
+  totalProcessed: number;
+}
+
+// PDF handling types and class
+interface PDFPageContent {
+  text: string;
+  viewport: any;
+  pageNum: number;
+}
+
+interface PDFTextItem {
+  str: string;
+  transform: number[];
+  pageNum?: number;
+  paragraph?: number;
+}
+
+interface StoredTextItem {
+  str: string;
+  pageNum: number;
+  paragraph: number;
+}
+
+class PDFHandler {
+  private url: string;
+  private pdfDoc: any = null;
+  private textItems: StoredTextItem[] = [];
+  
+  constructor(url: string) {
+    this.url = url;
+    // @ts-ignore
+    pdfjsLib.GlobalWorkerOptions.workerSrc = chrome.runtime.getURL('pdf.worker.min.js');
+  }
+
+  async init(): Promise<void> {
+    try {
+      // @ts-ignore
+      const loadingTask = pdfjsLib.getDocument(this.url);
+      this.pdfDoc = await loadingTask.promise;
+    } catch (error) {
+      console.error('Error loading PDF:', error);
+      throw error;
+    }
+  }
+
+  async getPageContent(pageNum: number): Promise<PDFPageContent> {
+    const page = await this.pdfDoc.getPage(pageNum);
+    const viewport = page.getViewport({ scale: 1.0 });
+    const textContent = await page.getTextContent();
+    
+    let currentParagraph = 0;
+    let lastY: number | undefined;
+    
+    textContent.items.forEach((item: PDFTextItem) => {
+      if (lastY !== undefined && Math.abs(item.transform[5] - lastY) > 15) {
+        currentParagraph++;
+      }
+      lastY = item.transform[5];
+      
+      this.textItems.push({
+        str: item.str,
+        pageNum,
+        paragraph: currentParagraph
+      });
+    });
+
+    const text = textContent.items.map((item: PDFTextItem) => item.str).join(' ');
+    return { text, viewport, pageNum };
+  }
+
+  async getAllContent(): Promise<string> {
+    const numPages = this.pdfDoc.numPages;
+    const pageTexts: string[] = [];
+
+    for (let i = 1; i <= numPages; i++) {
+      const { text } = await this.getPageContent(i);
+      pageTexts.push(text);
+    }
+
+    return pageTexts.join('\n\n');
+  }
+
+  findTextLocation(text: string): StoredTextItem | null {
+    for (let i = 0; i < this.textItems.length; i++) {
+      const windowSize = 100;
+      const chunk = this.textItems.slice(i, i + windowSize)
+        .map(item => item.str)
+        .join(' ');
+      
+      if (chunk.includes(text)) {
+        return this.textItems[i];
+      }
+    }
+    return null;
+  }
+}
+
+/**
+ * Extracts and processes factual claims from webpage content
+ * This class uses rule-based heuristics to identify claims
+ * It serves as a fallback when LLM-based extraction is unavailable
+ */
+class ContentExtractor {
+  private claimCounter = 0;
+
+  /**
+   * Get main content from webpage, excluding navigation, footers, etc.
+   * Focuses on paragraphs with substantive content by filtering out
+   * short text elements that are likely UI components
+   */
+  public getMainContent(): string[] {
+    // Get all paragraph elements
+    const paragraphs = Array.from(document.getElementsByTagName('p'));
+    
+    // Filter out short paragraphs (likely navigation/footer text)
+    // This helps focus on the actual content of the page
+    return paragraphs
+      .filter(p => p.textContent && p.textContent.length > 50)
+      .map(p => p.textContent as string);
+  }
+
+  /**
+   * Basic claim detection using rules
+   * - Contains numbers
+   * - Contains proper nouns (capitalized words not at start)
+   * - Reasonable length
+   */
+  private isLikelyClaim(sentence: string): boolean {
+    // Skip very short sentences
+    if (sentence.length < 30) return false;
+    
+    // Check for numbers
+    const hasNumbers = /\d/.test(sentence);
+    
+    // Check for proper nouns (simplified)
+    const hasProperNouns = /\s[A-Z][a-z]+/.test(sentence);
+    
+    // Check for common claim indicators
+    const hasClaimIndicators = /(found|showed|discovered|reported|according|study|research)/i.test(sentence);
+
+    return (hasNumbers || hasProperNouns) && hasClaimIndicators;
+  }
+
+  /**
+   * Split text into sentences, handling common abbreviations
+   */
+  private splitIntoSentences(text: string): string[] {
+    // Basic sentence splitting with some abbreviation handling
+    return text
+      .replace(/([.?!])\s+(?=[A-Z])/g, "$1|")
+      .split("|")
+      .map(s => s.trim())
+      .filter(s => s.length > 0);
+  }
+
+  /**
+   * Calculate relevance score based on heuristics
+   */
+  private calculateRelevance(sentence: string): number {
+    let score = 0.5; // Base score
+    
+    // Boost score for numbers
+    if (/\d/.test(sentence)) score += 0.2;
+    
+    // Boost for proper nouns
+    if (/\s[A-Z][a-z]+/.test(sentence)) score += 0.1;
+    
+    // Boost for research indicators
+    if (/(study|research|found|showed)/i.test(sentence)) score += 0.1;
+    
+    // Penalize very long sentences
+    if (sentence.length > 200) score -= 0.1;
+
+    return Math.min(Math.max(score, 0), 1); // Clamp between 0 and 1
+  }
+
+  /**
+   * Extract claims from the current webpage
+   */
+  public async extractClaims(maxClaims: number = 5): Promise<ClaimDetectionResult> {
+    const paragraphs = this.getMainContent();
+    const claims: Claim[] = [];
+    let totalProcessed = 0;
+
+    // Fall back to rule-based approach if LLM fails or isn't available
+    for (let pIndex = 0; pIndex < paragraphs.length; pIndex++) {
+      const sentences = this.splitIntoSentences(paragraphs[pIndex]);
+      
+      for (const sentence of sentences) {
+        totalProcessed++;
+        
+        if (this.isLikelyClaim(sentence)) {
+          const relevance = this.calculateRelevance(sentence);
+          
+          // Clean the text by removing references
+          const cleanText = sentence.replace(/\[\d+\]/g, '');
+          
+          claims.push({
+            id: ++this.claimCounter,
+            text: sentence,
+            cleanText,
+            context: {
+              page: 1,
+              paragraph: pIndex
+            },
+            relevance
+          });
+
+          if (claims.length >= maxClaims) {
+            return { claims, totalProcessed };
+          }
+        }
+      }
+    }
+    return { claims, totalProcessed };
+  }
+}
+
+// Link to our external stylesheet that has all the styles
+const linkToStyles = document.createElement('link');
+linkToStyles.rel = 'stylesheet';
+linkToStyles.href = chrome.runtime.getURL('styles/pdf-overlay.css');
+document.head.appendChild(linkToStyles);
+
+// Helper function to determine color based on confidence level
+function getConfidenceColor(confidence: number): string {
+  if (confidence >= 0.8) return 'var(--high-confidence)';   // High confidence - green
+  if (confidence >= 0.5) return 'var(--medium-confidence)'; // Medium confidence - yellow/amber
+  return 'var(--low-confidence)';                           // Low confidence - red
+}
+
+// Function to highlight text and add tooltip with source information
+// This is the core UI component that makes claims interactive
+// and displays verification results to the user
+function highlightClaim(claim: Claim, sources: any[]) {
+  console.log('Starting highlight process for claim:', claim.cleanText);
+  
+  // Find the paragraph containing our claim
+  const paragraphs = document.getElementsByTagName('p');
+  console.log('Found paragraphs:', paragraphs.length);
+  
+  for (const p of paragraphs) {
+    const cleanParagraphText = p.textContent?.replace(/\[\d+\]/g, '') || '';
+    console.log('Checking paragraph:', cleanParagraphText.substring(0, 50) + '...');
+    
+    if (cleanParagraphText.includes(claim.cleanText)) {
+      console.log('Found matching paragraph!');
+      
+      // Store original content for debugging
+      console.log('Original paragraph HTML:', p.innerHTML);
+      
+      // Create a wrapper div to preserve existing HTML structure
+      const wrapper = document.createElement('div');
+      wrapper.innerHTML = p.innerHTML;
+      
+      // Try a simpler approach: wrap the entire paragraph content
+      const span = document.createElement('span');
+      span.className = 'exa-claim-highlight';
+      span.innerHTML = wrapper.innerHTML;
+      wrapper.innerHTML = '';
+      wrapper.appendChild(span);
+      
+      // Update the paragraph
+      p.innerHTML = wrapper.innerHTML;
+      console.log('Updated paragraph HTML:', p.innerHTML);
+      
+      const highlightSpan = p.querySelector('.exa-claim-highlight');
+      console.log('Found highlight span:', !!highlightSpan);
+      
+      if (highlightSpan) {
+        let currentTooltip: HTMLElement | null = null;
+        let tooltipTimeout: number | null = null;
+        let currentSourceIndex = 0;
+        
+        // Function to update tooltip content
+        const updateTooltip = () => {
+          if (!currentTooltip) return;
+          
+          const currentSource = sources[currentSourceIndex];
+          const favicon = `https://www.google.com/s2/favicons?domain=${new URL(currentSource.url).hostname}`;
+          
+          // We'll update the tooltip to provide a better view of multiple sources
+          let tooltipHTML = '';
+          
+          // Add claim confidence if available
+          if (claim.confidence !== undefined) {
+            tooltipHTML += `
+              <div class="exa-claim-confidence">
+                <span style="font-weight: bold;">Certainty:</span> 
+                <span style="color: ${getConfidenceColor(claim.confidence)}">
+                  ${Math.round(claim.confidence * 100)}%
+                </span>
+              </div>
+            `;
+          }
+          
+          // Add sources header
+          tooltipHTML += `<div class="exa-sources-header">
+            Sources (${sources.length})
+          </div>`;
+          
+          // Enhanced UI for multiple sources:
+          // We provide two different UI patterns based on the number of sources
+          // This optimizes the UI for both readability and space efficiency
+          // 1. Show all sources in a compact list (if there are 1-2 sources)
+          // 2. Use pagination to step through sources (if there are 3+ sources)
+          
+          if (sources.length <= 2) {
+            // Option 1: Show all sources in a compact view for better at-a-glance comprehension
+            tooltipHTML += sources.map((source, index) => {
+              const srcFavicon = `https://www.google.com/s2/favicons?domain=${new URL(source.url).hostname}`;
+              return `
+                <div class="exa-tooltip-source">
+                  <div class="exa-tooltip-source-header">
+                    <img src="${srcFavicon}" alt="Source icon" class="exa-tooltip-favicon">
+                    <strong>${source.title}</strong>
+                    <span class="exa-source-confidence">
+                      ${Math.round(source.score * 100)}%
+                    </span>
+                  </div>
+                  <a href="${source.url}" target="_blank">View source</a>
+                  ${index < sources.length - 1 ? '<hr class="pdf-source-divider">' : ''}
+                </div>
+              `;
+            }).join('');
+          } else {
+            // Option 2: Use pagination for 3+ sources
+            // This provides a cleaner UI when there are multiple sources
+            // and allows users to focus on one source at a time
+            const source = sources[currentSourceIndex];
+            const srcFavicon = `https://www.google.com/s2/favicons?domain=${new URL(source.url).hostname}`;
+            
+            tooltipHTML += `
+              <div class="exa-tooltip-source">
+                <div class="exa-tooltip-source-header">
+                  <img src="${srcFavicon}" alt="Source icon" class="exa-tooltip-favicon">
+                  <strong>${source.title}</strong>
+                  <span class="exa-source-confidence">
+                    ${Math.round(source.score * 100)}%
+                  </span>
+                </div>
+                <a href="${source.url}" target="_blank">View source</a>
+              </div>
+              <div class="exa-tooltip-nav">
+                <button ${currentSourceIndex === 0 ? 'disabled' : ''}>
+                  ← Previous
+                </button>
+                <span>${currentSourceIndex + 1}/${sources.length}</span>
+                <button ${currentSourceIndex === sources.length - 1 ? 'disabled' : ''}>
+                  Next →
+                </button>
+              </div>
+            `;
+          }
+          
+          currentTooltip.innerHTML = tooltipHTML;
+
+          // Re-attach navigation handlers
+          if (sources.length > 2) { // Only need navigation handlers for 3+ sources
+            const nav = currentTooltip.querySelector('.exa-tooltip-nav');
+            if (nav) {
+              const [prevBtn, nextBtn] = nav.querySelectorAll('button');
+              prevBtn.addEventListener('click', () => {
+                if (currentSourceIndex > 0) {
+                  currentSourceIndex--;
+                  updateTooltip();
+                }
+              });
+              nextBtn.addEventListener('click', () => {
+                if (currentSourceIndex < sources.length - 1) {
+                  currentSourceIndex++;
+                  updateTooltip();
+                }
+              });
+            }
+          }
+        };
+
+        const clearTooltipTimeout = () => {
+          if (tooltipTimeout) {
+            clearTimeout(tooltipTimeout);
+            tooltipTimeout = null;
+          }
+        };
+
+        const startTooltipTimeout = () => {
+          clearTooltipTimeout();
+          tooltipTimeout = window.setTimeout(() => {
+            if (currentTooltip) {
+              currentTooltip.remove();
+              currentTooltip = null;
+            }
+          }, 300);
+        };
+
+        highlightSpan.addEventListener('mouseenter', () => {
+          clearTooltipTimeout();
+          
+          // Remove any existing tooltips
+          const existingTooltip = document.querySelector('.exa-tooltip');
+          if (existingTooltip) existingTooltip.remove();
+          
+          const newTooltip = document.createElement('div');
+          newTooltip.className = 'exa-tooltip';
+          
+          // Position the tooltip
+          const rect = highlightSpan.getBoundingClientRect();
+          newTooltip.style.top = `${rect.bottom + 5}px`;
+          newTooltip.style.left = `${rect.left}px`;
+          
+          document.body.appendChild(newTooltip);
+          currentTooltip = newTooltip;
+          
+          // Add animation class after a small delay to trigger the animation
+          setTimeout(() => {
+            newTooltip.classList.add('visible');
+          }, 10);
+          
+          // Initial tooltip content
+          updateTooltip();
+          
+          // Tooltip animation is handled by the class we added
+
+          // Add hover handlers to tooltip
+          newTooltip.addEventListener('mouseenter', clearTooltipTimeout);
+          newTooltip.addEventListener('mouseleave', startTooltipTimeout);
+        });
+
+        highlightSpan.addEventListener('mouseleave', startTooltipTimeout);
+      }
+      break;
+    }
+  }
+}
+
+async function isPDF(): Promise<boolean> {
+  return document.contentType === 'application/pdf' || 
+         window.location.pathname.toLowerCase().endsWith('.pdf');
+}
+
+async function createPDFOverlay() {
+  const overlay = document.createElement('div');
+  overlay.className = 'pdf-claims-overlay';
+  overlay.style.display = 'none';
+  document.body.appendChild(overlay);
+  return overlay;
+}
+
+async function analyzePDF(openAiKey: string) {
+  const overlay = await createPDFOverlay();
+  const analyzeButton = document.createElement('button');
+  analyzeButton.className = 'analyze-pdf-button';
+  analyzeButton.textContent = 'Analyze PDF';
+  document.body.appendChild(analyzeButton);
+  
+  analyzeButton.addEventListener('click', async () => {
+    try {
+      analyzeButton.textContent = 'Analyzing...';
+      analyzeButton.disabled = true;
+      
+      const pdfHandler = new PDFHandler(window.location.href);
+      await pdfHandler.init();
+      const content = await pdfHandler.getAllContent();
+      
+      // Try to use LLM extractor first, fallback to rule-based extractor
+      let claims: ClaimDetectionResult | undefined;
+      if (openAiKey) {
+        try {
+          const llmExtractor = new LLMExtractor(openAiKey);
+          const llmResults = await llmExtractor.extractClaims(content);
+          
+          if (llmResults.claims.length > 0) {
+            claims = {
+              claims: llmResults.claims.map((claimText: string, index: number) => {
+                return {
+                  id: index + 1,
+                  text: claimText,
+                  cleanText: claimText.replace(/\[\d+\]/g, ''),
+                  context: {
+                    page: 1,
+                    paragraph: index
+                  },
+                  relevance: 0.8,
+                  confidence: llmResults.confidence[index]
+                };
+              }),
+              totalProcessed: llmResults.claims.length
+            };
+          }
+        } catch (error: any) {
+          console.error('LLM extraction failed for PDF, falling back to rule-based:', error);
+        }
+      }
+      
+      // If LLM extraction failed or found no claims, use rule-based approach
+      if (!claims || claims.claims.length === 0) {
+        const extractor = new ContentExtractor();
+        claims = await extractor.extractClaims(5);
+      }
+      
+      overlay.innerHTML = `
+        <div class="pdf-claims-header">
+          <h3>Detected Claims</h3>
+          <small>${claims.claims.length} claims found</small>
+        </div>
+      `;
+      overlay.style.display = 'block';
+      
+      for (const claim of claims.claims) {
+        const claimDiv = document.createElement('div');
+        claimDiv.className = 'pdf-claim-item';
+        
+        // Find location in PDF
+        const location = pdfHandler.findTextLocation(claim.cleanText);
+        
+        chrome.runtime.sendMessage({
+          type: 'VERIFY_CLAIM',
+          claim
+        }, response => {
+          if (response.success && response.results && response.results.length > 0) {
+            const sources = response.results;
+            
+            // Create the basic claim information
+            let claimHTML = `
+              ${location ? `
+                <div class="pdf-claim-location">
+                  Page ${location.pageNum}, Paragraph ${location.paragraph + 1}
+                </div>
+              ` : ''}
+              <div>${claim.text}</div>
+              ${claim.confidence !== undefined ? `
+                <div class="pdf-claim-confidence">
+                  Certainty: <span style="color: ${getConfidenceColor(claim.confidence)}; font-weight: 500;">
+                    ${Math.round(claim.confidence * 100)}%
+                  </span>
+                </div>
+              ` : ''}
+              <div class="pdf-claim-sources">
+                <div class="pdf-claim-sources-header">Sources (${sources.length}):</div>
+            `;
+            
+            // Add all sources to the claim
+            sources.forEach((source: any, index: number) => {
+              claimHTML += `
+                <div class="pdf-claim-source-item">
+                  <div class="pdf-source-title">
+                    <a href="${source.url}" target="_blank">${source.title}</a>
+                    <span class="pdf-source-confidence">(${Math.round(source.score * 100)}% confidence)</span>
+                  </div>
+                  ${index < sources.length - 1 ? '<hr class="pdf-source-divider">' : ''}
+                </div>
+              `;
+            });
+            
+            // Close the sources div
+            claimHTML += `</div>`;
+            
+            claimDiv.innerHTML = claimHTML;
+            
+            // Scroll to text in PDF when clicked
+            claimDiv.addEventListener('click', () => {
+              if (location) {
+                // Most PDF viewers support #page=N for navigation
+                window.location.hash = `#page=${location.pageNum}`;
+              }
+            });
+          }
+        });
+        
+        overlay.appendChild(claimDiv);
+      }
+      
+      analyzeButton.style.display = 'none';
+    } catch (error) {
+      console.error('PDF analysis failed:', error);
+      analyzeButton.textContent = 'Analysis Failed';
+    }
+  });
+}
+
+// Main initialization
+chrome.storage.local.get(['openAiKey'], async result => {
+  if (await isPDF()) {
+    analyzePDF(result.openAiKey);
+    return;
+  }
+  
+  // Create analyze button for web pages
+  // Manually trigger claim extraction only after user clicks "Analyze Webpage"
+  // to avoid automatically scanning on page load and respect user privacy
+  const analyzeWebButton = document.createElement('button');
+  analyzeWebButton.className = 'analyze-webpage-button';
+  analyzeWebButton.textContent = 'Analyze Webpage';
+  document.body.appendChild(analyzeWebButton);
+  
+  analyzeWebButton.addEventListener('click', async () => {
+    // Perform analysis only when clicked
+    analyzeWebButton.textContent = 'Analyzing...';
+    analyzeWebButton.disabled = true;
+    
+    try {
+      // Get OpenAI key from storage
+      const { openAiKey } = await new Promise<{openAiKey: string}>(resolve => {
+        chrome.storage.local.get(['openAiKey'], (result) => resolve(result as {openAiKey: string}));
+      });
+      
+      // Use Content Extractor to get main content
+      const extractor = new ContentExtractor();
+      const paragraphs = extractor.getMainContent().join('\n\n');
+      
+      // Use LLM Extractor for more accurate claim detection
+      // This provides higher quality claim detection with confidence scoring
+      // compared to the rule-based approach
+      if (openAiKey) {
+        const llmExtractor = new LLMExtractor(openAiKey);
+        const llmResults = await llmExtractor.extractClaims(paragraphs);
+        
+        // Convert LLM results to Claim objects
+        if (llmResults.claims.length > 0) {
+          const claims: Claim[] = llmResults.claims.map((claimText: string, index: number) => {
+            return {
+              id: index + 1,
+              text: claimText,
+              cleanText: claimText.replace(/\[\d+\]/g, ''),
+              context: {
+                page: 1,
+                paragraph: index
+              },
+              relevance: 0.8, // Default relevance
+              confidence: llmResults.confidence[index]
+            };
+          });
+          
+          // Process each claim
+          for (const claim of claims) {
+            chrome.runtime.sendMessage({
+              type: 'VERIFY_CLAIM',
+              claim
+            }, response => {
+              if (response.success && response.results) {
+                highlightClaim(claim, response.results);
+              }
+            });
+          }
+          
+          analyzeWebButton.textContent = 'Analysis Complete';
+        } else {
+          // Fallback to rule-based approach if LLM finds no claims
+          // This ensures we still provide value even if the LLM extraction fails
+          console.log('LLM found no claims, falling back to rule-based detection');
+          await runExtraction(extractor);
+          analyzeWebButton.textContent = 'Analysis Complete (Fallback)';
+        }
+      } else {
+        // No API key, use rule-based approach
+        // The extension can work without OpenAI API access by using simple heuristics
+        console.log('No OpenAI API key, using rule-based detection');
+        await runExtraction(extractor);
+        analyzeWebButton.textContent = 'Analysis Complete';
+      }
+    } catch (error: any) {
+      console.error('Analysis failed:', error);
+      analyzeWebButton.textContent = 'Analysis Failed';
+    }
+    
+    setTimeout(() => {
+      analyzeWebButton.style.display = 'none';
+    }, 2000);
+  });
+});
+
+async function runExtraction(extractor: ContentExtractor) {
+  const result = await extractor.extractClaims(5); // Now extract multiple claims
+  
+  if (result.claims.length > 0) {
+    for (const claim of result.claims) {
+      chrome.runtime.sendMessage({
+        type: 'VERIFY_CLAIM',
+        claim
+      }, response => {
+        if (response.success && response.results) {
+          highlightClaim(claim, response.results);
+        }
+      });
+    }
+  }
+}
+
+================================================
+File: /docs/TESTING.md
+================================================
+# Testing the Current Extension
+
+## Setting Up for Testing
+
+To test the Athena DeepCite extension in its current state:
+
+1. **Build the TypeScript files**:
+   ```bash
+   npm run build
+   ```
+
+2. **Load the extension in Chrome**:
+   - Open Chrome and navigate to `chrome://extensions/`
+   - Enable "Developer mode" in the top-right corner
+   - Click "Load unpacked"
+   - Select the root folder of the repository (`/Users/samaydhawan/athena-deepcite`)
+
+3. **Verify the extension is loaded**:
+   - You should see "Deep Research Citation Verifier" in your list of extensions
+   - Make sure it's enabled (toggle should be on)
+
+## Testing on Web Pages
+
+1. Navigate to a webpage with factual content (e.g., a news article, Wikipedia page, etc.)
+2. Look for the "Analyze Webpage" button in the top-right corner of the page
+3. Click the button to begin analysis
+4. Wait for the analysis to complete (the button will show "Analysis Complete")
+5. Factual claims should be highlighted with a subtle blue background
+6. Hover over a highlighted claim to see source information and confidence scores
+7. Click on a source link to open the original source document
+
+**Good test pages**:
+- Wikipedia articles on scientific topics
+- News articles from major publications
+- Research blog posts
+
+## Testing on PDF Documents
+
+1. Open a PDF document in Chrome
+2. Look for the "Analyze PDF" button in the top-right corner
+3. Click the button to begin analysis
+4. Wait for the overlay panel to appear on the right side
+5. The panel should show detected claims with source information
+6. Click on a claim to navigate to its location in the PDF
+
+**Good test PDFs**:
+- Academic papers
+- Reports with factual information
+- News articles saved as PDFs
+
+## Known Issues
+
+- The extension may not correctly highlight claims in all webpages due to varying DOM structures
+- Some websites block content scripts or have complex formatting that interferes with highlighting
+- Very large PDFs may take a long time to process
+
+## Troubleshooting
+
+If the extension isn't working correctly:
+
+1. **Check for errors in the console**:
+   - Right-click on the page and select "Inspect"
+   - Go to the "Console" tab
+   - Look for any error messages related to the extension
+
+2. **Verify the extension is loaded properly**:
+   - Go to `chrome://extensions/`
+   - Make sure the extension is enabled
+   - Click the "Errors" button to see if there are any loading errors
+
+3. **Rebuild the extension**:
+   - Run `npm run build`
+   - Go to `chrome://extensions/`
+   - Click the refresh icon on the extension card
+
+4. **Check for content restrictions**:
+   - Some websites block content scripts or iframe content
+   - Try the extension on a different website
+
+## Reporting Issues
+
+When reporting issues, please include:
+
+1. The URL of the page where the issue occurred
+2. Steps to reproduce the issue
+3. Any error messages from the console
+4. Browser version and operating system information
+
+================================================
+File: /docs/README.md
+================================================
+# Athena DeepCite Extension Development
+
+## Current Status
+
+The Athena DeepCite extension is a Chrome extension that:
+- Detects factual claims in web pages and PDFs
+- Highlights these claims for user interaction
+- Uses Exa API to find supporting sources
+- Provides confidence scores for claims and sources
+
+During our work on Iteration 6 (Refactoring), we've created a plan for improving the codebase structure but haven't fully implemented it due to the specific requirements of Chrome extension architecture.
+
+## Documentation Files
+
+- **CURRENT_STATUS.md** - Describes the current state of the codebase
+- **IMPLEMENTATION_PLAN.md** - Outlines the phased approach to refactoring
+- **REFACTORING.md** - Details the architectural changes planned
+- **TESTING.md** - Instructions for testing the extension
+
+## Testing Instructions
+
+To test the extension:
+
+1. Make sure all files are in their original locations (not in src/ subdirectories)
+2. Build the extension: `npm run build`
+3. Load the unpacked extension in Chrome:
+   - Go to `chrome://extensions/`
+   - Enable Developer mode
+   - Click "Load unpacked"
+   - Select the extension directory
+
+For detailed testing instructions, see `TESTING.md`.
+
+## Technical Challenges
+
+The main challenge in refactoring is that Chrome extensions have specific requirements:
+
+1. **Module System**: Chrome extension content scripts run in a specific context that doesn't fully support ES modules
+2. **Building**: We need a bundler like Webpack to properly handle the module dependencies
+3. **Background/Content Script Communication**: Requires special handling for message passing
+
+## Next Steps
+
+1. Set up Webpack for bundling
+2. Follow the implementation plan for refactoring
+3. Test thoroughly after each phase
+
+## Original Files
+
+The core extension functionality is in these files:
+- `contentScript.ts` - Main content script
+- `background.ts` - Background service worker
+- `llmExtractor.ts` - LLM-based extraction
+- `types.ts` - Shared types
+
+These files should remain in their original locations until we implement the bundling solution.
+
+================================================
+File: /docs/CURRENT_STATUS.md
+================================================
+# Current Status of Athena DeepCite
+
+## Overview
+
+Athena DeepCite is currently in a transition state. We've created a plan for refactoring but haven't fully implemented it yet. The documentation in the `docs/` directory outlines the future architecture and implementation steps.
+
+## Current Files
+
+The main codebase consists of:
+
+- **contentScript.ts** - Main content script that runs in the browser
+- **background.ts** - Background service worker for API calls
+- **llmExtractor.ts** - Class for LLM-based claim extraction
+- **types.ts** - Shared type definitions
+- **options.html/ts** - Settings page (future functionality)
+- **styles/pdf-overlay.css** - Styling for the extension
+
+## How to Test
+
+Please refer to `docs/TESTING.md` for detailed instructions on testing the extension.
+
+## Refactoring Plans
+
+We've created a comprehensive refactoring plan in `docs/IMPLEMENTATION_PLAN.md` and architectural details in `docs/REFACTORING.md`. The key points are:
+
+1. Move to a modular architecture
+2. Add webpack for bundling
+3. Improve separation of concerns
+4. Centralize configuration
+5. Enhance code documentation
+
+## Current Challenges
+
+The main challenge is that Chrome extensions have specific limitations that affect our refactoring:
+
+1. Module support is limited in Manifest V3
+2. Direct imports between content and background scripts aren't possible
+3. Message passing needs careful handling with complex data structures
+
+## Next Steps
+
+To continue development:
+
+1. Review the implementation plan
+2. Set up webpack for bundling
+3. Follow the phased approach in the implementation plan
+
+================================================
+File: /docs/IMPLEMENTATION_PLAN.md
+================================================
+# Implementation Plan for Athena DeepCite Refactoring
+
+This document outlines a comprehensive plan for refactoring the Athena DeepCite extension while ensuring it remains functional in a browser environment.
+
+## Phase 1: Setup
+
+1. **Add Webpack for bundling**
+   - Install webpack and related packages
+   - Create a webpack configuration file
+   - Configure TypeScript to work with webpack
+
+2. **Update project structure**
+   - Create src directory with subdirectories
+   - Move existing TypeScript files to appropriate locations
+   - Set up path aliases in tsconfig.json
+
+## Phase 2: Modularization
+
+1. **Extract type definitions**
+   - Move all interfaces to types.ts
+   - Define common interfaces for extractors and handlers
+
+2. **Refactor PDF handling**
+   - Extract PDFHandler class to its own file
+   - Create a dedicated PDFAnalyzer for UI components
+
+3. **Refactor content extraction**
+   - Implement IExtractor interface
+   - Move ContentExtractor to its own file
+   - Update LLMExtractor to implement the interface
+
+4. **Create settings manager**
+   - Centralize API key management
+   - Add caching for better performance
+   - Create utility functions for storage access
+
+## Phase 3: Message Handling
+
+1. **Refactor background script**
+   - Implement message router pattern
+   - Create handler functions for each message type
+   - Document the message flow
+
+2. **Update content script**
+   - Simplify to focus on initialization and delegation
+   - Add proper error handling
+   - Improve logging for troubleshooting
+
+## Phase 4: Build and Testing
+
+1. **Update build process**
+   - Create npm scripts for development and production builds
+   - Add watch mode for faster iteration
+   - Configure source maps for debugging
+
+2. **Add ESLint and formatting**
+   - Install and configure ESLint
+   - Add TypeScript-specific rules
+   - Create npm script for linting
+
+3. **Test across browsers**
+   - Test in Chrome
+   - Test in Firefox (if supporting)
+   - Verify functionality on different websites
+
+## Phase 5: Documentation
+
+1. **Update code documentation**
+   - Add JSDoc comments to all public methods
+   - Document message formats
+   - Document extension architecture
+
+2. **Create user documentation**
+   - Update README with new features
+   - Create troubleshooting guide
+   - Document testing procedures
+
+## Timeline
+
+| Phase | Estimated Time | Description |
+|-------|----------------|-------------|
+| Phase 1 | 1-2 days | Setup bundling and project structure |
+| Phase 2 | 2-3 days | Modularize the codebase |
+| Phase 3 | 1-2 days | Refactor messaging system |
+| Phase 4 | 1-2 days | Testing and build process |
+| Phase 5 | 1 day | Documentation and final touches |
+
+## Immediate Next Steps
+
+1. Install webpack and configure it
+2. Create the src directory structure
+3. Update tsconfig.json for the new structure
+4. Begin extracting modules while keeping the extension functional
+
+================================================
+File: /docs/REFACTORING.md
+================================================
+# Athena DeepCite Refactoring Guide
+
+## Overview
+
+This document outlines the approach to refactoring the Athena DeepCite codebase to improve maintainability, extensibility, and organization. Due to the Chrome extension architecture constraints, we have to carefully plan the refactoring to ensure it works in the browser environment.
+
+## Recommended Architecture
+
+### Directory Structure
+
+```
+/athena-deepcite/
+├── src/
+│   ├── extractors/
+│   │   ├── contentExtractor.ts     # Rule-based claim extraction
+│   │   └── llmExtractor.ts         # AI-powered claim extraction
+│   ├── handlers/
+│   │   ├── pdfHandler.ts           # PDF document processing
+│   │   ├── pdfAnalyzer.ts          # PDF UI and analysis
+│   │   └── webPageHandler.ts       # Web page UI and analysis
+│   ├── utils/
+│   │   └── settingsManager.ts      # API key and settings management
+│   ├── types.ts                    # Shared type definitions
+│   ├── contentScript.ts            # Main content script entry point
+│   └── background.ts               # Background service worker
+├── dist/                           # Compiled JavaScript
+├── styles/                         # CSS styles
+└── lib/                            # Third-party libraries
+```
+
+### Module Pattern
+
+Because Chrome extensions in Manifest V3 have limitations with ES modules, we recommend using a module pattern:
+
+```typescript
+// Example for an extractor
+namespace Extractors {
+  export interface IClaimExtractor {
+    extractClaims(text: string, maxClaims?: number): Promise<Types.ClaimDetectionResult>;
+  }
+
+  export class ContentExtractor implements IClaimExtractor {
+    // Implementation
+  }
+}
+```
+
+This approach provides modularity while maintaining compatibility with Chrome extension architecture.
+
+## Building the Extension
+
+To build the extension with the new architecture:
+
+1. Set up a bundler like Webpack or Rollup to handle module imports
+2. Configure the bundler to output files in the format Chrome extensions expect
+3. Use the `tsconfig.json` path mappings to maintain clean imports
+
+Example Webpack configuration:
+
+```javascript
+module.exports = {
+  entry: {
+    contentScript: './src/contentScript.ts',
+    background: './src/background.ts',
+  },
+  output: {
+    filename: '[name].js',
+    path: path.resolve(__dirname, 'dist'),
+  },
+  // More configuration...
+};
+```
+
+## Testing the Extension
+
+For testing during development:
+
+1. Build the extension: `npm run build`
+2. Load the unpacked extension in Chrome:
+   - Go to `chrome://extensions/`
+   - Enable "Developer mode" 
+   - Click "Load unpacked"
+   - Select the extension directory
+
+Test both web pages and PDF documents to ensure all functionality works correctly.
+
+## Implementation Notes
+
+### Module Dependencies
+
+Organize your dependencies carefully to avoid circular dependencies:
+
+1. `types.ts` should have no imports
+2. Modules should only import from modules "below" them in the dependency graph
+3. Utility modules should be at the bottom of the graph
+
+### Background/Content Script Communication
+
+Use a structured message passing approach:
+
+```typescript
+// In content script
+chrome.runtime.sendMessage({ 
+  type: 'VERIFY_CLAIM', 
+  claim 
+}, response => {
+  // Handle response
+});
+
+// In background script
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  switch (request.type) {
+    case 'VERIFY_CLAIM':
+      handleVerifyClaim(request, sendResponse);
+      break;
+    // Other cases...
+  }
+  return true; // Will respond asynchronously
+});
+```
+
+## Migration Strategy
+
+To migrate the codebase:
+
+1. Create the new directory structure
+2. Move functionality into appropriate modules
+3. Refactor interdependent code to use the new structure
+4. Update imports and references
+5. Test thoroughly after each significant change
+
+## Known Limitations
+
+- Chrome extensions have limited ESM support
+- TypeScript path mappings work for development but need bundling for production
+- Chrome extensions need careful handling of async operations
+
+## Next Steps
+
+1. Set up a bundler (Webpack or Rollup)
+2. Implement the module pattern
+3. Migrate code incrementally
+4. Add automated testing
+
+================================================
+File: /README.md
+================================================
+# Deep Research Citation Verifier (Athena DeepCite)
+
+A Chrome extension that helps users verify factual claims on webpages and PDFs. 
+It combines AI-powered claim detection with Exa's neural search technology to provide source verification and confidence scores for factual statements.
+
+## Features
+- Detects factual claims in web pages and PDFs on demand
+- Uses AI-powered claim extraction with confidence scoring
+- Highlights claims with a subtle blue background
+- Shows multiple sources on hover with confidence scores
+- Provides direct links to original source documents
+- Supports dark mode through CSS variables
+- Works with both web pages and PDF documents
+
+## Installation
+
+1. **Clone the repository**
+bash
+git clone [repository-url]
+cd deep-research-citation-verifier
+
+2. **Install dependencies**
+bash
+npm install
+
+3. **Build the extension**
+bash
+npm run build
+
+
+4. **Load in Chrome**
+- Open Chrome and go to `chrome://extensions/`
+- Enable "Developer mode" in the top right
+- Click "Load unpacked"
+- Select the extension directory containing `manifest.json`
+
+## Project Structure
+
+```
+├── contentScript.ts     # DOM manipulation, highlighting, claim detection
+├── background.ts        # API calls, service worker
+├── llmExtractor.ts      # AI-powered claim extraction
+├── types.ts             # TypeScript interfaces
+├── dist/                # Compiled JavaScript
+├── lib/                 # Third-party libraries (pdf.js)
+├── styles/              # CSS styles with variables
+│   └── pdf-overlay.css  # Styling for web and PDF overlays
+├── manifest.json        # Extension config and permissions
+└── options.html         # Settings page (future development)
+```
+
+## Usage
+
+1. **Visit any webpage** with factual content (e.g., news articles, Wikipedia, research blogs)
+
+2. **Click the "Analyze Webpage" button** (top-right) to detect and highlight claims.
+
+3. **The extension will:**
+   - Find factual claims in the text using either AI or rule-based analysis
+   - Highlight them with a subtle blue background
+   - Connect to Exa's API to verify sources
+
+4. **Interact with highlights:**
+   - Hover over any highlighted text
+   - See source information and confidence scores in a tooltip
+   - Click "View source" to open the original reference
+
+## Current Limitations
+- Uses developer API key (not for production)
+- May highlight only partial paragraphs in some websites
+- Requires manual activation via the "Analyze Webpage" button
+- Limited to text content (no image analysis)
+- Depends on OpenAI API for best results (falls back to rule-based analysis if unavailable)
+
+## Development Notes
+
+### Key Files
+- `contentScript.ts`: Handles DOM manipulation, claim detection, and highlighting
+- `background.ts`: Manages API calls to Exa for source verification
+- `llmExtractor.ts`: Provides AI-powered claim detection with confidence scoring
+- `styles/pdf-overlay.css`: Contains all styling with CSS variables for consistent UI
+- `manifest.json`: Extension configuration and permissions
+
+### API Keys
+The extension relies on two API services:
+
+1. **Exa API**: Used for retrieving source information for claims
+   - Currently using a hardcoded demo key in `background.ts` (for development only)
+   - Will be moved to the options page in a future update
+
+2. **OpenAI API**: Used for improved claim detection and confidence scoring
+   - Currently using a hardcoded key for demonstration
+   - The extension will fall back to rule-based detection if the key is invalid or unavailable
+   - Will be configurable in the options page in a future update
+
+### Building 
+
+bash
+npm run build
+
+This compiles TypeScript files to JavaScript in the `dist` directory.
+
+### Reloading
+After making changes:
+1. Run build command
+2. Go to `chrome://extensions/`
+3. Click the refresh icon on the extension
+
+
+### Key Components
+- **Claim Detection**: Uses heuristics to find factual statements
+- **Source Verification**: Calls Exa API to find supporting sources
+- **UI**: Highlights + tooltips showing source info
+
+### Current Limitations
+- Uses hardcoded API key (in background.ts)
+- Highlights one claim at a time
+- Basic error handling
+- Text-only analysis
+
+### Making Changes
+1. Edit TypeScript files in `src/`
+2. Run `npm run build`
+3. Refresh extension in Chrome
+
+### Testing on Different Sites
+Works best on:
+- Wikipedia articles
+- News sites
+- Research blogs
+- Technical documentation
+
+## Next Steps
+- [x] Add manual analysis button to respect user privacy
+- [x] Support multiple claim highlights
+- [x] Improve UI with modern design elements
+- [x] Add confidence scores from LLM analysis
+- [ ] Refactor code for better maintainability (see docs/IMPLEMENTATION_PLAN.md)
+- [ ] Add API key configuration UI in options page
+- [ ] Improve cross-site compatibility for highlighting
+- [ ] Add error handling for API failures
+- [ ] Add browser dark mode support
+- [ ] Package for Chrome Web Store
+
+## Development Documentation
+
+For developers working on this extension, please see the following documentation:
+
+- [Current Status](docs/CURRENT_STATUS.md)
+- [Testing Guide](docs/TESTING.md)
+- [Refactoring Plan](docs/REFACTORING.md)
+- [Implementation Plan](docs/IMPLEMENTATION_PLAN.md)
+
+
+================================================
+File: /types.ts
+================================================
+export interface Claim {
+  id: number;
+  text: string;
+  cleanText?: string;
+  context: {
+    page: number;
+    paragraph: number;
+  };
+  relevance: number;
+  confidence?: number; // Added confidence score from LLM
+}
+
+export interface ClaimDetectionResult {
+  claims: Claim[];
+  totalProcessed: number;
+}
+
+export interface ExaSearchResult {
+  title: string;
+  url: string;
+  publishedDate?: string;
+  score: number;
+  highlights: string[];
+}
+
+export interface VerifyClaimRequest {
+  type: 'VERIFY_CLAIM';
+  claim: Claim;
+}
+
+================================================
+File: /styles/pdf-overlay.css
+================================================
+/* Global variables for consistent styling */
+:root {
+  /* Primary theme colors */
+  --primary-color: #4a90e2;
+  --primary-hover: #3a7dce;
+  --secondary-color: #f8f9fa;
+  
+  /* Confidence level colors */
+  --high-confidence: #28a745;
+  --medium-confidence: #ffc107;
+  --low-confidence: #dc3545;
+  
+  /* Highlight colors */
+  --highlight-color: rgba(74, 144, 226, 0.15);
+  --highlight-hover: rgba(74, 144, 226, 0.25);
+  --highlight-border: rgba(74, 144, 226, 0.5);
+  
+  /* UI colors */
+  --tooltip-bg: white;
+  --tooltip-border: #e0e0e0;
+  --tooltip-shadow: rgba(0, 0, 0, 0.1);
+  --text-primary: #333;
+  --text-secondary: #666;
+  --text-muted: #888;
+  --divider-color: #eee;
+  
+  /* Sources */
+  --source-primary: #0066cc;
+  --source-bg: rgba(74, 144, 226, 0.05);
+  
+  /* Animations */
+  --transition-speed: 0.2s;
+  
+  /* Loading */
+  --loading-color: #666;
+  
+  /* Font family */
+  --font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+/* Dark mode support */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --tooltip-bg: #2d2d2d;
+    --tooltip-border: #404040;
+    --tooltip-shadow: rgba(0, 0, 0, 0.3);
+    --text-primary: #e0e0e0;
+    --text-secondary: #c0c0c0;
+    --text-muted: #a0a0a0;
+    --divider-color: #444;
+    --source-primary: #66b3ff;
+    --source-bg: rgba(74, 144, 226, 0.15);
+    --highlight-color: rgba(74, 144, 226, 0.25);
+    --highlight-hover: rgba(74, 144, 226, 0.35);
+  }
+}
+
+/* PDF Overlay Styles */
+.pdf-claims-overlay {
+  position: fixed;
+  right: 0;
+  top: 0;
+  width: 320px;
+  height: 100vh;
+  background: var(--tooltip-bg);
+  box-shadow: -2px 0 15px var(--tooltip-shadow);
+  z-index: 9999;
+  padding: 20px;
+  overflow-y: auto;
+  font-family: var(--font-family);
+  border-left: 1px solid var(--tooltip-border);
+  color: var(--text-primary);
+}
+
+.pdf-claims-header {
+  position: sticky;
+  top: 0;
+  background: var(--tooltip-bg);
+  padding: 12px 0;
+  border-bottom: 1px solid var(--divider-color);
+  margin-bottom: 16px;
+}
+
+.pdf-claims-header h3 {
+  margin: 0 0 4px 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.pdf-claims-header small {
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.pdf-claim-item {
+  margin-bottom: 16px;
+  padding: 12px;
+  border: 1px solid var(--divider-color);
+  border-radius: 8px;
+  transition: all var(--transition-speed) ease;
+  cursor: pointer;
+  background-color: var(--secondary-color);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.03);
+}
+
+.pdf-claim-item:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.06);
+  border-color: var(--primary-color);
+}
+
+.pdf-claim-location {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+  display: inline-block;
+  background: var(--source-bg);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.pdf-claim-confidence {
+  margin-top: 6px;
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+
+.pdf-claim-sources {
+  margin-top: 10px;
+  background: var(--source-bg);
+  padding: 10px;
+  border-radius: 6px;
+}
+
+.pdf-claim-sources-header {
+  font-weight: 600;
+  margin-bottom: 8px;
+  font-size: 14px;
+  color: var(--text-primary);
+}
+
+.pdf-claim-source-item {
+  margin-bottom: 8px;
+  transition: all var(--transition-speed) ease;
+}
+
+.pdf-claim-source-item:hover {
+  transform: translateX(2px);
+}
+
+.pdf-source-title {
+  font-weight: 500;
+  margin-bottom: 4px;
+}
+
+.pdf-source-title a {
+  color: var(--source-primary);
+  text-decoration: none;
+  transition: color var(--transition-speed) ease;
+}
+
+.pdf-source-title a:hover {
+  text-decoration: underline;
+}
+
+.pdf-source-confidence {
+  margin-left: 6px;
+  font-size: 12px;
+  background: var(--source-bg);
+  padding: 2px 6px;
+  border-radius: 4px;
+  color: var(--text-secondary);
+}
+
+.pdf-source-divider {
+  margin: 10px 0;
+  border: 0;
+  border-top: 1px solid var(--divider-color);
+}
+
+/* Buttons */
+.analyze-pdf-button, .analyze-webpage-button {
+  position: fixed;
+  right: 20px;
+  padding: 10px 16px;
+  background: var(--primary-color);
+  color: white;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  z-index: 10000;
+  font-family: var(--font-family);
+  font-size: 14px;
+  font-weight: 500;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+  transition: all var(--transition-speed) ease;
+}
+
+.analyze-pdf-button {
+  top: 20px;
+}
+
+.analyze-webpage-button {
+  top: 60px;
+}
+
+.analyze-pdf-button:hover, .analyze-webpage-button:hover {
+  background: var(--primary-hover);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+}
+
+.analyze-pdf-button:disabled, .analyze-webpage-button:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+/* Web Highlights and Tooltips */
+.exa-claim-highlight {
+  background-color: var(--highlight-color) !important;
+  border-bottom: 2px solid var(--highlight-border) !important;
+  cursor: pointer !important;
+  display: inline !important;
+  padding: 2px 0 !important;
+  position: relative !important;
+  transition: all var(--transition-speed) ease !important;
+}
+
+.exa-claim-highlight:hover {
+  background-color: var(--highlight-hover) !important;
+}
+
+.exa-tooltip {
+  position: fixed !important;
+  background: var(--tooltip-bg) !important;
+  border: 1px solid var(--tooltip-border) !important;
+  box-shadow: 0 4px 15px var(--tooltip-shadow) !important;
+  padding: 12px 16px !important;
+  border-radius: 8px !important;
+  font-size: 14px !important;
+  max-width: 320px !important;
+  z-index: 999999 !important;
+  color: var(--text-primary) !important;
+  backdrop-filter: blur(8px) !important;
+  transform: translateY(8px) !important;
+  opacity: 0 !important;
+  transition: opacity var(--transition-speed), transform var(--transition-speed) !important;
+  font-family: var(--font-family) !important;
+}
+
+.exa-tooltip.visible {
+  opacity: 1 !important;
+  transform: translateY(0) !important;
+}
+
+.exa-tooltip::before {
+  content: '' !important;
+  position: absolute !important;
+  top: -6px !important;
+  left: 20px !important;
+  width: 12px !important;
+  height: 12px !important;
+  background: var(--tooltip-bg) !important;
+  border-left: 1px solid var(--tooltip-border) !important;
+  border-top: 1px solid var(--tooltip-border) !important;
+  transform: rotate(45deg) !important;
+}
+
+.exa-tooltip a {
+  color: var(--source-primary) !important;
+  text-decoration: none !important;
+  cursor: pointer !important;
+  transition: all var(--transition-speed) ease !important;
+}
+
+.exa-tooltip a:hover {
+  text-decoration: underline !important;
+}
+
+.exa-tooltip-header {
+  display: flex !important;
+  align-items: center !important;
+  margin-bottom: 8px !important;
+}
+
+.exa-tooltip-favicon {
+  width: 16px !important;
+  height: 16px !important;
+  margin-right: 8px !important;
+  border-radius: 2px !important;
+}
+
+.exa-tooltip-source {
+  margin-bottom: 10px !important;
+  padding: 6px !important;
+  border-radius: 6px !important;
+  transition: background 0.2s !important;
+}
+
+.exa-tooltip-source:hover {
+  background: var(--source-bg) !important;
+}
+
+.exa-tooltip-source-header {
+  display: flex !important;
+  align-items: center !important;
+  margin-bottom: 6px !important;
+}
+
+.exa-sources-header {
+  font-weight: 600 !important;
+  margin-bottom: 10px !important;
+  color: var(--text-primary) !important;
+}
+
+.exa-claim-confidence {
+  margin-bottom: 10px !important;
+  padding: 6px 8px !important;
+  background: var(--source-bg) !important;
+  border-radius: 6px !important;
+  font-size: 13px !important;
+}
+
+.exa-tooltip-nav {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  margin-top: 10px !important;
+  padding-top: 8px !important;
+  border-top: 1px solid var(--divider-color) !important;
+}
+
+.exa-tooltip-nav button {
+  background: var(--secondary-color) !important;
+  border: 1px solid var(--divider-color) !important;
+  color: var(--text-primary) !important;
+  cursor: pointer !important;
+  padding: 4px 10px !important;
+  border-radius: 6px !important;
+  transition: all var(--transition-speed) ease !important;
+  font-family: var(--font-family) !important;
+}
+
+.exa-tooltip-nav button:hover:not(:disabled) {
+  background: var(--highlight-color) !important;
+  border-color: var(--primary-color) !important;
+}
+
+.exa-tooltip-nav button:disabled {
+  opacity: 0.5 !important;
+  cursor: not-allowed !important;
+}
+
+.exa-source-confidence {
+  display: inline-block !important;
+  padding: 2px 6px !important;
+  background: var(--source-bg) !important;
+  border-radius: 4px !important;
+  font-size: 12px !important;
+  margin-left: 8px !important;
+  color: var(--text-secondary) !important;
+}
+
+/* Animation for loading spinner */
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.exa-loading {
+  display: inline-block !important;
+  width: 16px !important;
+  height: 16px !important;
+  border: 2px solid var(--loading-color) !important;
+  border-top-color: transparent !important;
+  border-radius: 50% !important;
+  animation: spin 1s linear infinite !important;
+}
+
+================================================
+File: /background.ts
+================================================
+// Define types inline since we can't use modules in service worker
+interface ExaSearchResult {
+  title: string;
+  url: string;
+  publishedDate?: string;
+  score: number;
+  highlights: string[];
+}
+
+interface VerifyClaimRequest {
+  type: 'VERIFY_CLAIM';
+  claim: {
+    id: number;
+    text: string;
+    context: {
+      page: number;
+      paragraph: number;
+    };
+    relevance: number;
+  };
+}
+
+// Ensure service worker activates
+console.log('Background service worker starting...');
+
+// Basic background service worker
+chrome.runtime.onInstalled.addListener(() => {
+  console.log('Extension installed');
+  // Store the OpenAI key for LLM-based claim extraction
+  // TODO: In the future, this will be configured by the user in options.html
+  // The extension will fall back to rule-based extraction if this key is invalid
+  chrome.storage.local.set({ 
+    openAiKey: '4f19f27d-e552-4fed-b88d-eb2b6a217f54'  // Development key only
+  });
+});
+
+// Exa API configuration for source verification
+// TODO: Move to user-configurable storage in future version
+const EXA_API_KEY = '4f19f27d-e552-4fed-b88d-eb2b6a217f54'; 
+const EXA_API_URL = 'https://api.exa.ai/search';
+
+/**
+ * Verify a claim using Exa's API to find supporting sources
+ * This is the core function that connects claims to reliable sources
+ * 
+ * @param claim - The text of the claim to verify
+ * @returns Promise resolving to an array of search results with source information
+ */
+async function verifyClaimWithExa(claim: string): Promise<ExaSearchResult[]> {
+  try {
+    // Send the claim to Exa API as a neural search query
+    // This uses semantic understanding rather than just keyword matching
+    const response = await fetch(EXA_API_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${EXA_API_KEY}`
+      },
+      body: JSON.stringify({
+        query: claim,
+        numResults: 3, // Limit to 3 sources for UI simplicity
+        type: 'neural'  // Use neural search for better semantic understanding
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error(`Exa API error: ${response.status}`);
+    }
+
+    const data = await response.json();
+    return data.results;
+  } catch (error) {
+    console.error('Error verifying claim:', error);
+    throw error;
+  }
+}
+
+// Listen for messages from content script
+// This handles the communication between the content script (UI) and background service worker (API calls)
+chrome.runtime.onMessage.addListener((
+  request: VerifyClaimRequest,
+  sender: chrome.runtime.MessageSender,
+  sendResponse: (response?: any) => void
+) => {
+  if (request.type === 'VERIFY_CLAIM') {
+    // Process the claim verification request
+    // This keeps API calls in the background script for better security and performance
+    verifyClaimWithExa(request.claim.text)
+      .then(results => {
+        console.log('Verification results:', results);
+        sendResponse({ success: true, results });
+      })
+      .catch(error => {
+        // Handle API errors gracefully
+        console.error('Verification failed:', error);
+        sendResponse({ success: false, error: error.message });
+      });
+    return true; // Return true to indicate we'll respond asynchronously
+  }
+  return true; // Always return true from the listener
+});
+
+================================================
+File: /package.json
+================================================
+{
+  "scripts": {
+    "build": "tsc",
+    "lint": "eslint ."
+  },
+  "name": "athena-deepcite",
+  "version": "1.0.0",
+  "main": "index.js",
+  "keywords": [
+    "chrome-extension",
+    "fact-checking",
+    "citation",
+    "research"
+  ],
+  "author": "",
+  "license": "ISC",
+  "description": "A Chrome extension for verifying factual claims with source citations",
+  "devDependencies": {
+    "@eslint/js": "^9.22.0",
+    "@types/chrome": "^0.0.304",
+    "@typescript-eslint/eslint-plugin": "^8.27.0",
+    "@typescript-eslint/parser": "^8.27.0",
+    "eslint": "^9.22.0",
+    "typescript": "^5.7.3",
+    "typescript-eslint": "^8.27.0"
+  }
+}
+
+
+================================================
+File: /manifest.json
+================================================
+{
+  "manifest_version": 3,
+  "name": "Deep Research Citation Verifier",
+  "version": "1.0.0",
+  "description": "Verifies factual claims in documents using Exa's API and overlays citations",
+  "permissions": [
+    "storage",
+    "activeTab",
+    "webRequest"
+  ],
+  "host_permissions": [
+    "https://api.exa.ai/*",
+    "https://api.openai.com/*",
+    "<all_urls>"
+  ],
+  "web_accessible_resources": [{
+    "resources": ["pdf.worker.min.js", "styles/pdf-overlay.css"],
+    "matches": ["<all_urls>"]
+  }],
+  "background": {
+    "service_worker": "dist/background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "<all_urls>",
+        "file://*/*.pdf",
+        "https://*/*.pdf"
+      ],
+      "js": [
+        "lib/pdf.min.js",
+        "dist/llmExtractor.js",
+        "dist/contentScript.js"
+      ],
+      "css": ["styles/pdf-overlay.css"]
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "options_page": "options.html"
+} 
+
+================================================
+File: /tsconfig.json
+================================================
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "CommonJS",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "outDir": "dist",
+    "moduleResolution": "node",
+    "baseUrl": ".",
+    "paths": {
+      "@handlers/*": ["src/handlers/*"],
+      "@extractors/*": ["src/extractors/*"],
+      "@utils/*": ["src/utils/*"],
+      "@types": ["src/types"]
+    },
+    // Commented out rootDir to allow files in their original locations
+    // "rootDir": "src"
+  },
+  "include": ["./**/*.ts"],
+  "exclude": ["node_modules"]
+}
+
+================================================
+File: /options.html
+================================================
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Deep Research Citation Verifier Settings</title>
+  <style>
+    body {
+      padding: 20px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      max-width: 800px;
+      margin: 0 auto;
+      color: #333;
+    }
+
+    .section {
+      margin-bottom: 30px;
+      padding: 20px;
+      border: 1px solid #eee;
+      border-radius: 8px;
+    }
+
+    h2 {
+      margin-top: 0;
+      color: #0066cc;
+    }
+
+    .field {
+      margin-bottom: 15px;
+    }
+
+    label {
+      display: block;
+      margin-bottom: 5px;
+      font-weight: 500;
+    }
+
+    input[type="text"], textarea {
+      width: 100%;
+      padding: 8px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      font-family: inherit;
+    }
+
+    .api-key-container {
+      display: flex;
+      gap: 10px;
+    }
+
+    .api-key-container input {
+      flex: 1;
+    }
+
+    button {
+      padding: 8px 16px;
+      background: #0066cc;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 14px;
+    }
+
+    button:hover {
+      background: #0052a3;
+    }
+
+    button:disabled {
+      background: #ccc;
+      cursor: not-allowed;
+    }
+
+    .toggle-container {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .toggle {
+      position: relative;
+      width: 50px;
+      height: 24px;
+    }
+
+    .toggle input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+
+    .slider {
+      position: absolute;
+      cursor: pointer;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background-color: #ccc;
+      transition: .4s;
+      border-radius: 24px;
+    }
+
+    .slider:before {
+      position: absolute;
+      content: "";
+      height: 16px;
+      width: 16px;
+      left: 4px;
+      bottom: 4px;
+      background-color: white;
+      transition: .4s;
+      border-radius: 50%;
+    }
+
+    input:checked + .slider {
+      background-color: #0066cc;
+    }
+
+    input:checked + .slider:before {
+      transform: translateX(26px);
+    }
+
+    .status {
+      margin-left: 10px;
+      font-size: 14px;
+    }
+
+    .success { color: #28a745; }
+    .error { color: #dc3545; }
+  </style>
+</head>
+<body>
+  <div class="section">
+    <h2>API Keys</h2>
+    <div class="field">
+      <label for="exaKey">Exa API Key (Required)</label>
+      <div class="api-key-container">
+        <input type="text" id="exaKey" placeholder="Enter your Exa API key">
+        <button id="testExaKey">Test Key</button>
+      </div>
+      <span id="exaKeyStatus" class="status"></span>
+    </div>
+    <div class="field">
+      <label for="openaiKey">OpenAI API Key (Optional - Enables advanced features)</label>
+      <div class="api-key-container">
+        <input type="text" id="openaiKey" placeholder="Enter your OpenAI API key">
+        <button id="testOpenAIKey">Test Key</button>
+      </div>
+      <span id="openaiKeyStatus" class="status"></span>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>Appearance</h2>
+    <div class="field toggle-container">
+      <label class="toggle">
+        <input type="checkbox" id="highlightsEnabled">
+        <span class="slider"></span>
+      </label>
+      <span>Enable claim highlights</span>
+    </div>
+    <div class="field toggle-container">
+      <label class="toggle">
+        <input type="checkbox" id="sidebarEnabled">
+        <span class="slider"></span>
+      </label>
+      <span>Show sidebar automatically</span>
+    </div>
+    <div class="field toggle-container">
+      <label class="toggle">
+        <input type="checkbox" id="darkMode">
+        <span class="slider"></span>
+      </label>
+      <span>Use dark mode for tooltips</span>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>Site Settings</h2>
+    <div class="field">
+      <label for="excludedDomains">Excluded Domains (one per line)</label>
+      <textarea id="excludedDomains" rows="5" placeholder="example.com&#10;internal.company.com"></textarea>
+    </div>
+  </div>
+
+  <button id="saveSettings">Save Settings</button>
+</body>
+<script src="dist/options.js"></script>
+</html> 
+
+================================================
+File: /eslint.config.js
+================================================
+import eslint from '@eslint/js';
+import tseslint from 'typescript-eslint';
+
+export default tseslint.config(
+  eslint.configs.recommended,
+  ...tseslint.configs.recommended,
+  {
+    languageOptions: {
+      globals: {
+        chrome: true,
+        document: true,
+        window: true,
+      },
+    },
+    rules: {
+      'indent': ['error', 2],
+      'linebreak-style': ['error', 'unix'],
+      'quotes': ['error', 'single', { 'allowTemplateLiterals': true }],
+      'semi': ['error', 'always'],
+      '@typescript-eslint/explicit-module-boundary-types': 'off',
+      '@typescript-eslint/no-explicit-any': 'off',
+    },
+  },
+);
+
+================================================
+File: /CLAUDE.md
+================================================
+# Athena DeepCite Development Guide
+
+## Build & Development Commands
+- Build: `npm run build` (compiles TS to JS)
+- Install dependencies: `npm install`
+- Load extension: Load unpacked from `chrome://extensions/` (dev mode enabled)
+- After changes: Run build and refresh extension in Chrome
+
+## Code Style Guidelines
+- TypeScript with strict typing, defining interfaces for all data structures
+- Interfaces defined in `types.ts` when shared between files
+- Error handling with try/catch blocks and console.error for logging
+- Asynchronous code using async/await pattern
+- Class-based components with private/public method designation
+- Prefer const over let, avoid var
+- 2-space indentation, single quotes for strings
+- Use camelCase for variables/functions, PascalCase for classes/interfaces
+- Comments for complex logic and public method documentation
+- Avoid hardcoded values (except during development)
+
+## Extension Architecture
+- Content script: DOM interactions, UI management (contentScript.ts)
+- Background script: API calls, message handling (background.ts)
+- PDF handling via pdf.js library
+- Message passing between scripts with chrome.runtime.sendMessage
+
+================================================
+File: /options.ts
+================================================
+interface Settings {
+  exaKey: string;
+  openaiKey: string;
+  highlightsEnabled: boolean;
+  sidebarEnabled: boolean;
+  darkMode: boolean;
+  excludedDomains: string[];
+}
+
+// Test the Exa API key
+async function testExaKey(key: string): Promise<boolean> {
+  try {
+    const response = await fetch('https://api.exa.ai/search', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${key}`
+      },
+      body: JSON.stringify({
+        query: 'test query',
+        numResults: 1
+      })
+    });
+    return response.ok;
+  } catch (error) {
+    return false;
+  }
+}
+
+// Test the OpenAI API key
+async function testOpenAIKey(key: string): Promise<boolean> {
+  try {
+    const response = await fetch('https://api.openai.com/v1/models', {
+      headers: {
+        'Authorization': `Bearer ${key}`
+      }
+    });
+    return response.ok;
+  } catch (error) {
+    return false;
+  }
+}
+
+// Save settings to storage
+async function saveSettings(): Promise<void> {
+  const settings: Settings = {
+    exaKey: (document.getElementById('exaKey') as HTMLInputElement).value,
+    openaiKey: (document.getElementById('openaiKey') as HTMLInputElement).value,
+    highlightsEnabled: (document.getElementById('highlightsEnabled') as HTMLInputElement).checked,
+    sidebarEnabled: (document.getElementById('sidebarEnabled') as HTMLInputElement).checked,
+    darkMode: (document.getElementById('darkMode') as HTMLInputElement).checked,
+    excludedDomains: (document.getElementById('excludedDomains') as HTMLTextAreaElement)
+      .value
+      .split('\n')
+      .map(d => d.trim())
+      .filter(d => d)
+  };
+
+  await chrome.storage.local.set(settings);
+  
+  // Notify content scripts of settings change
+  const tabs = await chrome.tabs.query({});
+  for (const tab of tabs) {
+    if (tab.id) {
+      chrome.tabs.sendMessage(tab.id, { type: 'SETTINGS_UPDATED', settings });
+    }
+  }
+}
+
+// Load settings from storage
+async function loadSettings(): Promise<void> {
+  const settings = await chrome.storage.local.get({
+    exaKey: '',
+    openaiKey: '',
+    highlightsEnabled: true,
+    sidebarEnabled: false,
+    darkMode: false,
+    excludedDomains: []
+  });
+
+  (document.getElementById('exaKey') as HTMLInputElement).value = settings.exaKey;
+  (document.getElementById('openaiKey') as HTMLInputElement).value = settings.openaiKey;
+  (document.getElementById('highlightsEnabled') as HTMLInputElement).checked = settings.highlightsEnabled;
+  (document.getElementById('sidebarEnabled') as HTMLInputElement).checked = settings.sidebarEnabled;
+  (document.getElementById('darkMode') as HTMLInputElement).checked = settings.darkMode;
+  (document.getElementById('excludedDomains') as HTMLTextAreaElement).value = 
+    settings.excludedDomains.join('\n');
+}
+
+// Update status message
+function updateStatus(elementId: string, success: boolean, message: string): void {
+  const element = document.getElementById(elementId);
+  if (element) {
+    element.textContent = message;
+    element.className = `status ${success ? 'success' : 'error'}`;
+  }
+}
+
+// Initialize
+document.addEventListener('DOMContentLoaded', () => {
+  loadSettings();
+
+  // Test Exa API key
+  document.getElementById('testExaKey')?.addEventListener('click', async () => {
+    const key = (document.getElementById('exaKey') as HTMLInputElement).value;
+    const success = await testExaKey(key);
+    updateStatus('exaKeyStatus', success, 
+      success ? '✓ API key is valid' : '✗ Invalid API key');
+  });
+
+  // Test OpenAI API key
+  document.getElementById('testOpenAIKey')?.addEventListener('click', async () => {
+    const key = (document.getElementById('openaiKey') as HTMLInputElement).value;
+    const success = await testOpenAIKey(key);
+    updateStatus('openaiKeyStatus', success, 
+      success ? '✓ API key is valid' : '✗ Invalid API key');
+  });
+
+  // Save settings
+  document.getElementById('saveSettings')?.addEventListener('click', async () => {
+    await saveSettings();
+    updateStatus('saveStatus', true, 'Settings saved!');
+    setTimeout(() => {
+      const element = document.getElementById('saveStatus');
+      if (element) element.textContent = '';
+    }, 2000);
+  });
+}); 
+
+================================================
+File: /REFACTORING.md
+================================================
+# Athena DeepCite Refactoring Summary
+
+This document summarizes the restructuring changes made in Iteration 6 to improve the organization and maintainability of the codebase.
+
+## Directory Structure Changes
+
+The codebase has been reorganized into a more modular structure:
+
+```
+/src/
+  /extractors/     - Claim extraction strategies
+    contentExtractor.ts  - Rule-based claim extraction
+    llmExtractor.ts      - AI-powered claim extraction
+  /handlers/       - Document type-specific handlers
+    pdfHandler.ts        - PDF document processing
+    pdfAnalyzer.ts       - PDF UI and analysis
+    webPageHandler.ts    - Web page UI and analysis
+  /utils/          - Shared utilities
+    settingsManager.ts   - API key and settings management
+  types.ts         - Core type definitions and interfaces
+  background.ts    - Background service worker 
+  contentScript.ts - Main entry point for content script
+```
+
+## Key Improvements
+
+### 1. Separation of Concerns
+
+- **PDFHandler**: Separated PDF-specific logic into its own handler
+- **WebPageHandler**: Isolated web page-specific handling
+- **Content Script**: Reduced to a lightweight coordinator that delegates to the appropriate handlers
+
+### 2. Interface-based Design
+
+- Created the `IClaimExtractor` interface to standardize claim extraction
+- Both `ContentExtractor` and `LLMExtractor` now implement this interface
+- This enables easy swapping or addition of new extraction strategies in the future
+
+### 3. Centralized Configuration
+
+- Created a `settingsManager.ts` utility to manage:
+  - API key retrieval and storage
+  - API endpoint configuration
+  - Memory caching for better performance
+
+### 4. Enhanced Message Handling
+
+- Background script now uses a switch-case pattern for message routing
+- Each message type has its own handler function
+- Makes adding new message types easier in the future
+
+### 5. Developer Tools
+
+- Added ESLint for TypeScript
+- Configured linting rules
+- Added npm scripts for building and linting
+
+### 6. Path Mapping
+
+- Updated tsconfig.json with path aliases:
+  - `@handlers/*`
+  - `@extractors/*`
+  - `@utils/*`
+  - `@types`
+
+## Benefits
+
+1. **Maintainability**: Smaller, focused files are easier to understand and modify
+2. **Extensibility**: New extractors or handlers can be added with minimal changes to existing code
+3. **Team Development**: Clear separation makes it easier for multiple developers to work concurrently
+4. **Testing**: Modular structure facilitates unit testing of individual components
+5. **Documentation**: Code organization now better reflects the logical architecture
+
+## Next Steps
+
+1. Complete migration to the new structure:
+   - Update any remaining imports to use path aliases
+   - Ensure backward compatibility with existing features
+
+2. Consider adding unit tests:
+   - Jest or other testing frameworks can be added to test individual components
+
+3. Future feature additions:
+   - New message types can be added to background.ts
+   - New extraction strategies can implement the IClaimExtractor interface
+   - New document type handlers can be added to the handlers directory
+

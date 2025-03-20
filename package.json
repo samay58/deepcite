@@ -1,0 +1,27 @@
+{
+  "scripts": {
+    "build": "tsc",
+    "lint": "eslint ."
+  },
+  "name": "athena-deepcite",
+  "version": "1.0.0",
+  "main": "index.js",
+  "keywords": [
+    "chrome-extension",
+    "fact-checking",
+    "citation",
+    "research"
+  ],
+  "author": "",
+  "license": "ISC",
+  "description": "A Chrome extension for verifying factual claims with source citations",
+  "devDependencies": {
+    "@eslint/js": "^9.22.0",
+    "@types/chrome": "^0.0.304",
+    "@typescript-eslint/eslint-plugin": "^8.27.0",
+    "@typescript-eslint/parser": "^8.27.0",
+    "eslint": "^9.22.0",
+    "typescript": "^5.7.3",
+    "typescript-eslint": "^8.27.0"
+  }
+}

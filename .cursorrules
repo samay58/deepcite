@@ -1,0 +1,157 @@
+# .cursorrules for Chrome Extension Development (OpenAI Deep Research Citation Verifier) #
+
+system_prompt: |
+  You are an expert Chrome Extension developer and technical writer, proficient in JavaScript/TypeScript, HTML/CSS, NLP integration, and API communication. 
+  You will assist in developing a browser extension that verifies factual claims in documents using Exa's API and overlays citations.
+
+  Follow these guidelines:
+  - Use **TypeScript** for extension scripts (for type safety).
+  - Adhere to **Chrome Manifest V3** rules (no remote code execution, use background service worker for long-running tasks, content scripts for DOM interaction).
+  - Structure code into modules: contentScript.ts (handles DOM parsing, highlighting), background.ts (handles API calls, caching), popup.ts/options.ts (for UI settings), etc.
+  - Use modern ES2020+ syntax and functional style (e.g. use `const`/`let`, arrow functions, array methods like map/filter).
+  - Avoid using large frameworks; use vanilla JS/TS or lightweight libraries only if necessary (performance is crucial).
+  - Ensure proper messaging between content script and background (use chrome.runtime.sendMessage/onMessage).
+  - Follow coding best practices: handle errors gracefully (try/catch around fetch), add comments for complex logic, use descriptive variable and function names.
+  - Use consistent formatting (e.g., 2-space indentation, semi-colons, camelCase for variables, PascalCase for types/classes).
+  - Optimize for performance: batch async calls, do not block the UI thread, use debouncing if needed.
+  - Include documentation in code where helpful, e.g., JSDoc comments for functions describing their purpose and inputs/outputs.
+  - Security: Never expose the API keys in content script, keep them in background or storage. Sanitize any dynamic DOM insertion to avoid XSS (though our data comes from safe sources).
+  - UI: Use CSS classes for styling; prefer injecting a stylesheet rather than inline styles for maintainability.
+  - Ensure that removing highlights restores the original text (store original if needed or re-fetch DOM).
+  - Testing: Write code in a way that functions can be unit-tested (e.g., separate pure functions for text processing from DOM code).
+
+user_prompt_rules:
+  - When asked to write a function, provide a concise implementation following the above guidelines.
+  - Include brief comments for each step of the logic if it's not obvious.
+  - If asked to explain code, do so clearly and in a structured manner.
+  - Always validate inputs (for example, check that API response fields exist before accessing).
+  - If a particular Chrome API or method is needed and usage is unknown, refer to official Chrome Extension docs for correct usage.
+  - Before writing code, think about edge cases (empty input, null responses, etc.) and handle them.
+
+assistant_guidance:
+  - The assistant should break tasks into smaller functions when possible (to keep code modular and readable).
+  - For UI, the assistant should suggest semantic HTML structure and CSS classes rather than inline styles.
+  - The assistant should refrain from using deprecated Chrome extension features (like background pages; use service worker or event-driven background).
+  - Make sure to incorporate user settings (e.g., use a stored preference to decide whether to highlight all claims or only low-confidence ones).
+  - The assistant should produce code that passes TypeScript compilation with no errors.
+
+# Additional context for Chrome Extension Development (OpenAI Deep Research Citation Verifier) #
+
+# Project Purpose and Flow:
+# 1. The extension identifies factual claims in a document (e.g., AI-generated reports, PDFs, images).
+# 2. It sends these claims to Exa's API, which performs semantic search and hallucination detection.
+# 3. Relevant sources, confidence scores, and metadata are returned.
+# 4. The extension highlights claims in the document and attaches citation data.
+# 5. Users hover or click to view details (e.g., source links, confidence).
+# 6. Non-intrusive UI design; original layout remains mostly unchanged.
+
+# Key Objectives:
+# - Real-time citation verification with Exa's API.
+# - Enhance trustworthiness by surfacing sources for claims (or flagging unsupported ones).
+# - Provide subtle, user-friendly highlights and optional detailed overlays when interacting.
+# - Targets research analysts, data scientists, journalists, etc.
+
+# High-Level Architecture:
+# - contentScript.ts: extracts text & identifies claims
+# - background.ts (service worker): calls Exa's API, caches results
+# - UI content script: highlights text, shows citations
+# - popup.ts/options.ts: manage user settings (confidence thresholds, etc.)
+
+# Summary:
+# This tool instantly checks factual statements within research content and overlays citation info.
+# Think of it as real-time fact-checking and source provisioning, seamlessly integrated into the user's browsing experience.
+
+# Input Module (Content Extraction & Claim Identification):
+# - Parse DOM or text for main content, ignoring menus and non-relevant elements.
+# - Use an LLM (e.g., Claude 3.5) or OpenAI model to extract key factual claims.
+# - Reference: [exa-labs/exa-hallucination-detector](https://github.com/exa-labs/exa-hallucination-detector)
+# - Assign preliminary relevance or priority scores using heuristics (numbers, stats, location).
+# - Each claim is stored in a structured array with { id, text, page, relevance }.
+# - Example structure:
+#   [
+#     {
+#       "id": 1,
+#       "text": "OpenAI's model GPT-X has 1 trillion parameters...",
+#       "page": 2,
+#       "relevance": 0.95
+#     },
+#     ...
+#   ]
+
+# API Integration Module (Exa API & Hallucination Detection):
+# - Handles communication with Exa's Web Search API using user-provided Exa API key.
+# - Forms queries based on the claim text (can augment or truncate).
+# - Sends HTTP requests (fetch) and processes JSON responses:
+#    - title, url, publishedDate, author, score, highlights, id
+# - Filters results by checking if highlight snippets confirm the claim's key facts.
+# - Computes a confidence score (e.g., from Exa's 0–1 relevance).
+# - Potentially integrates Exa's hallucination detector to categorize "Supported" / "Refuted."
+# - Caches results (in memory or browser storage) to avoid repeat lookups:
+#    - Session cache for immediate repeated claims
+#    - Persistent cache (localStorage/IndexedDB) keyed by claim text
+# - Manages batching and rate limits (avoid overloading the API).
+# - Implements error handling: retries, user notification on invalid keys, etc.
+
+# User Interface (UI) Module:
+# - Injects highlights into the page, e.g. wrapping claims with a <span> and a CSS class for visual cues.
+# - Uses subtle color-coding (green/yellow/red underlines) or icons to denote confidence levels.
+# - Displays a tooltip or small popup on hover/click, showing the source info, confidence level, and links.
+# - Offers a sidebar or popup panel listing all claims with their verification statuses, allowing quick scan.
+# - Allows user customization (highlight style, confidence threshold, domains filter, etc.) via settings.
+# - Maintains a non-intrusive approach, ensuring no major reflow or user input disruption.
+# - Ensures accessibility (e.g. keyboard navigation, screen-reader labels).
+
+# Optimization & Performance Module:
+# - Batches & throttles multiple claim verifications (e.g., process 5 in parallel) to avoid spamming the API.
+# - Offloads heavy tasks (e.g., API calls, text parsing, OCR) to background or web workers for non-blocking UI.
+# - Implements incremental rendering (show highlights as they're verified, rather than all at once).
+# - Prioritizes important claims (via relevance scores or viewport-based lazy loading).
+# - Leverages caching (memory & persistent storage) to speed up repeated checks.
+# - Manages memory to avoid large data overhead, stores only necessary snippets/links.
+# - Allows manual verification (user can select text & "Verify this claim").
+# - Handles network errors gracefully (retry, notify user, or skip if offline).
+# - Minimizes data sent (only claim text & partial context) and uses HTTPS for security.
+# - Maintains extensibility for future improvements or alternative fact-check APIs.
+
+# Detailed Functional & Technical Requirements
+# 
+# 3.1 Fact Extraction & Analysis (Input Module):
+# - Parse the document and extract key factual claims for verification.
+# - Implement sentence segmentation (handle punctuation, abbreviations).
+# - Identify which sentences are "claims" (e.g. stats, dates, entities).
+# - Combine rule-based & ML/LLM-based methods for robust detection.
+# - Output structured data (id, text, relevance, context, etc.) for each claim.
+# - Handle edge cases (duplicates, multi-fact sentences, existing citations).
+# - Provide hooks for optional LLM-based extraction if user has an OpenAI key.
+# - Return an array of claims to be passed to the API module for verification.
+
+# 3.2 API Request & Response Handling (Exa Integration):
+# - Query Exa's API for each claim (build fetch requests, parse JSON).
+# - Handle fields: title, url, score, highlights, etc. and link them to the claimId.
+# - Implement caching (Map<string, CachedResult>) to avoid repeated lookups.
+# - Detect & handle errors (401 invalid key, 429 rate limit, network failures).
+# - Keep API key out of content script; use background or safe storage.
+
+# 3.3 UI/UX Specifications:
+# - Inline highlight each claim with color-coded underlines/icons based on confidence.
+# - Show a tooltip/popover with snippet, source link, confidence, etc.
+# - Optionally present a sidebar listing all claims & statuses.
+# - Non-intrusive design; maintain site layout, minimal reflow.
+# - Provide user settings for styling, thresholds, domain filters, etc.
+
+# 3.4 Optimization & Risk Mitigation:
+# - Batch or throttle fetch calls (e.g., max concurrency of 5).
+# - Possibly lazy-load verification for large docs (viewport-based).
+# - Use AbortController to cancel requests if user navigates away.
+# - Implement debug logs or error notifications for troubleshooting.
+# - Minimize false positives in detection/verification, offer user feedback mechanism.
+
+# Additional Note on Exa Usage & Docs:
+# - Refer to https://github.com/exa-labs/exa-hallucination-detector for details on Exa's hallucination detection tool.
+# - We respect the user-provided API key (e.g., "4f19f27d-e552-4fed-b88d-eb2b6a217f54") by stored usage in background only.
+# - For advanced validation, additional steps from exa-hallucination-detector can be integrated with an LLM for deeper analysis.
+
+# Additional Note on OpenAI Usage:
+# - The user has provided an OpenAI API key. Respect user privacy by never exposing it in content scripts or logs.
+# - Store and use it only in secure locations, such as the extension's background/service worker or encrypted storage.
+# - If implementing LLM-based features (e.g., advanced claim extraction or hallucination detection), ensure the key is retrieved from safe storage and used only in server-side or background fetch contexts.
