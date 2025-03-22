@@ -20,6 +20,26 @@ interface VerifyClaimRequest {
   };
 }
 
+interface Settings {
+  exaKey: string;
+  openaiKey: string;
+  highlightsEnabled: boolean;
+  sidebarEnabled: boolean;
+  darkMode: boolean;
+  excludedDomains: string[];
+  maxVerificationsPerDay: number;
+  enableCaching: boolean;
+  cacheDuration: number;
+  useLLMExtraction: boolean;
+  usageCount: number;
+  lastUsageReset: number;
+}
+
+interface ClaimCache {
+  timestamp: number;
+  results: ExaSearchResult[];
+}
+
 // Ensure service worker activates
 console.log('Background service worker starting...');
 
@@ -27,8 +47,16 @@ console.log('Background service worker starting...');
 chrome.runtime.onInstalled.addListener(() => {
   console.log('Extension installed');
   // Set default settings if not already set
-  chrome.storage.local.get(['openaiKey', 'exaKey'], (result: {openaiKey?: string, exaKey?: string}) => {
-    const defaults: {openaiKey?: string, exaKey?: string} = {};
+  chrome.storage.local.get([
+    'openaiKey', 
+    'exaKey', 
+    'maxVerificationsPerDay',
+    'enableCaching',
+    'cacheDuration',
+    'usageCount',
+    'lastUsageReset'
+  ], (result) => {
+    const defaults: any = {};
     
     if (!result.openaiKey) {
       defaults['openaiKey'] = '';
@@ -38,11 +66,50 @@ chrome.runtime.onInstalled.addListener(() => {
       defaults['exaKey'] = '';
     }
     
+    if (result.maxVerificationsPerDay === undefined) {
+      defaults['maxVerificationsPerDay'] = 10;
+    }
+    
+    if (result.enableCaching === undefined) {
+      defaults['enableCaching'] = true;
+    }
+    
+    if (result.cacheDuration === undefined) {
+      defaults['cacheDuration'] = 7;
+    }
+    
+    if (result.usageCount === undefined) {
+      defaults['usageCount'] = 0;
+    }
+    
+    if (result.lastUsageReset === undefined) {
+      defaults['lastUsageReset'] = Date.now();
+    }
+    
     if (Object.keys(defaults).length > 0) {
       chrome.storage.local.set(defaults);
     }
   });
 });
+
+// Check if usage limits should be reset (new day)
+async function checkAndResetDailyUsage(): Promise<void> {
+  const { lastUsageReset } = await chrome.storage.local.get(['lastUsageReset']);
+  
+  if (lastUsageReset) {
+    const lastResetDate = new Date(lastUsageReset).toDateString();
+    const todayDate = new Date().toDateString();
+    
+    if (lastResetDate !== todayDate) {
+      // It's a new day, reset the counter
+      console.log('New day detected, resetting usage counter');
+      await chrome.storage.local.set({
+        usageCount: 0,
+        lastUsageReset: Date.now()
+      });
+    }
+  }
+}
 
 // The Exa API key will be retrieved from storage in the verifyClaimWithExa function
 const EXA_API_URL = 'https://api.exa.ai/search';
@@ -56,12 +123,54 @@ const EXA_API_URL = 'https://api.exa.ai/search';
  */
 async function verifyClaimWithExa(claim: string): Promise<ExaSearchResult[]> {
   try {
-    // Get the API key from storage
-    const result = await chrome.storage.local.get(['exaKey']);
-    const exaKey = result.exaKey;
+    // First check for a new day to potentially reset usage counter
+    await checkAndResetDailyUsage();
+
+    // Get settings from storage
+    const settings = await chrome.storage.local.get([
+      'exaKey', 
+      'maxVerificationsPerDay', 
+      'enableCaching', 
+      'cacheDuration',
+      'usageCount'
+    ]) as Settings;
+    
+    const { 
+      exaKey, 
+      maxVerificationsPerDay = 10, 
+      enableCaching = true, 
+      cacheDuration = 7,
+      usageCount = 0 
+    } = settings;
     
     if (!exaKey) {
       throw new Error('Exa API key not found. Please set it in the extension options.');
+    }
+    
+    // Check if user has reached daily limit
+    if (maxVerificationsPerDay > 0 && usageCount >= maxVerificationsPerDay) {
+      throw new Error(`Daily verification limit (${maxVerificationsPerDay}) reached. Please try again tomorrow.`);
+    }
+    
+    // Check cache first if enabled
+    if (enableCaching) {
+      const cacheKey = `cache:${claim}`;
+      const cachedData = await chrome.storage.local.get([cacheKey]);
+      
+      if (cachedData && cachedData[cacheKey]) {
+        const cache = cachedData[cacheKey] as ClaimCache;
+        
+        // Check if cache is still valid based on cacheDuration (days)
+        const cacheAgeMs = Date.now() - cache.timestamp;
+        const cacheMaxAgeMs = cacheDuration * 24 * 60 * 60 * 1000; // Convert days to ms
+        
+        if (cacheAgeMs < cacheMaxAgeMs) {
+          console.log('Returning cached result for claim');
+          return cache.results;
+        } else {
+          console.log('Cache expired, fetching fresh results');
+        }
+      }
     }
     
     // Send the claim to Exa API as a neural search query
@@ -84,7 +193,23 @@ async function verifyClaimWithExa(claim: string): Promise<ExaSearchResult[]> {
     }
 
     const data = await response.json();
-    return data.results;
+    const results = data.results;
+    
+    // Update usage counter
+    await chrome.storage.local.set({ usageCount: usageCount + 1 });
+    
+    // Cache the results if caching is enabled
+    if (enableCaching) {
+      const cacheKey = `cache:${claim}`;
+      const cacheData: ClaimCache = {
+        timestamp: Date.now(),
+        results: results
+      };
+      
+      await chrome.storage.local.set({ [cacheKey]: cacheData });
+    }
+    
+    return results;
   } catch (error) {
     console.error('Error verifying claim:', error);
     throw error;
@@ -107,11 +232,74 @@ chrome.runtime.onMessage.addListener((
         sendResponse({ success: true, results });
       })
       .catch(error => {
-        // Handle API errors gracefully
-        console.error('Verification failed:', error);
-        sendResponse({ success: false, error: error.message });
+        // Check if this is a daily limit error
+        if (error.message && error.message.includes('Daily verification limit')) {
+          console.warn('Daily limit reached:', error.message);
+          sendResponse({ 
+            success: false, 
+            error: 'DAILY_LIMIT_REACHED',
+            message: error.message,
+            results: [] 
+          });
+        } else {
+          // Handle other API errors gracefully by returning an empty results array
+          console.error('Verification failed:', error);
+          sendResponse({ success: false, error: 'API_ERROR', results: [] });
+        }
       });
     return true; // Return true to indicate we'll respond asynchronously
+  } else if (request.type === 'GET_USAGE_STATS') {
+    // Return current usage statistics
+    chrome.storage.local.get(['usageCount', 'maxVerificationsPerDay', 'lastUsageReset'], (result) => {
+      sendResponse({
+        success: true,
+        usageCount: result.usageCount || 0,
+        maxVerificationsPerDay: result.maxVerificationsPerDay || 10,
+        lastUsageReset: result.lastUsageReset || Date.now()
+      });
+    });
+    return true;
   }
   return true; // Always return true from the listener
 });
+
+// Clean up old cached items periodically
+async function cleanupOldCaches(): Promise<void> {
+  try {
+    // Get all storage items
+    const allItems = await chrome.storage.local.get(null);
+    const { cacheDuration = 7 } = allItems;
+    
+    // Find all cache keys
+    const cacheKeys = Object.keys(allItems).filter(key => key.startsWith('cache:'));
+    const keysToRemove: string[] = [];
+    
+    // Check each cache's age
+    const now = Date.now();
+    const maxAgeMs = cacheDuration * 24 * 60 * 60 * 1000; // Convert days to ms
+    
+    for (const key of cacheKeys) {
+      const cache = allItems[key] as ClaimCache;
+      if (cache && cache.timestamp) {
+        const age = now - cache.timestamp;
+        if (age > maxAgeMs) {
+          keysToRemove.push(key);
+        }
+      }
+    }
+    
+    // Remove old caches
+    if (keysToRemove.length > 0) {
+      console.log(`Removing ${keysToRemove.length} expired cache entries`);
+      await chrome.storage.local.remove(keysToRemove);
+    }
+  } catch (error) {
+    console.error('Error cleaning up caches:', error);
+  }
+}
+
+// Run cache cleanup once a day
+setInterval(cleanupOldCaches, 24 * 60 * 60 * 1000); // Every 24 hours
+
+// Also run cleanup when extension starts
+cleanupOldCaches();

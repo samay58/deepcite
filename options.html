@@ -153,7 +153,17 @@
   </div>
 
   <div class="section">
-    <h2>Appearance</h2>
+    <h2>Extraction & Appearance</h2>
+    <div class="field toggle-container">
+      <label class="toggle">
+        <input type="checkbox" id="useLLMExtraction">
+        <span class="slider"></span>
+      </label>
+      <span>Use AI-powered extraction (requires OpenAI key)</span>
+      <span style="display: block; margin-left: 60px; font-size: 13px; color: #666;">
+        When enabled, uses AI to identify factual claims. When disabled, uses rule-based extraction.
+      </span>
+    </div>
     <div class="field toggle-container">
       <label class="toggle">
         <input type="checkbox" id="highlightsEnabled">
@@ -174,6 +184,30 @@
         <span class="slider"></span>
       </label>
       <span>Use dark mode for tooltips</span>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>Usage Management</h2>
+    <div class="field">
+      <label for="maxVerifications">Maximum API Verification Calls Per Day (0 = unlimited)</label>
+      <input type="number" id="maxVerifications" min="0" max="1000" placeholder="10" style="width: 100px;">
+      <div style="margin-top: 5px; color: #666; font-size: 14px;">
+        <span>Current usage today: </span>
+        <span id="currentUsage">0</span> calls
+        <button id="resetUsage" style="margin-left: 10px; background-color: #f8f9fa; color: #333; border: 1px solid #ddd;">Reset Counter</button>
+      </div>
+    </div>
+    <div class="field toggle-container">
+      <label class="toggle">
+        <input type="checkbox" id="enableCaching">
+        <span class="slider"></span>
+      </label>
+      <span>Enable Claim Caching (save API costs)</span>
+    </div>
+    <div class="field">
+      <label for="cacheDuration">Cache Duration (in days)</label>
+      <input type="number" id="cacheDuration" min="1" max="30" placeholder="7" style="width: 100px;">
     </div>
   </div>
 

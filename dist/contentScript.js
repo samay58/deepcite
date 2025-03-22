@@ -1,4 +1,6 @@
 "use strict";
+// Global variable to store all discovered claims
+let extractedClaims = [];
 class PDFHandler {
     constructor(url) {
         this.pdfDoc = null;
@@ -262,6 +264,100 @@ function addStylesheet() {
     document.head.appendChild(linkToStyles);
     console.log('Stylesheet added:', linkToStyles.href);
 }
+// Creates a small sidebar toggle button fixed to the right edge of the screen
+function createSidebarToggle() {
+    const toggleBtn = document.createElement('button');
+    toggleBtn.className = 'deepcite-sidebar-toggle';
+    toggleBtn.textContent = '»'; // Arrow icon
+    // Position it fixed on the right, about halfway down
+    toggleBtn.style.position = 'fixed';
+    toggleBtn.style.right = '0';
+    toggleBtn.style.top = '50%';
+    toggleBtn.style.transform = 'translateY(-50%)';
+    toggleBtn.style.width = '32px';
+    toggleBtn.style.height = '48px';
+    toggleBtn.style.backgroundColor = 'var(--primary-color, #2F80ED)';
+    toggleBtn.style.color = '#fff';
+    toggleBtn.style.border = 'none';
+    toggleBtn.style.borderRadius = '8px 0 0 8px'; // Round left corners
+    toggleBtn.style.cursor = 'pointer';
+    toggleBtn.style.zIndex = '99999';
+    toggleBtn.style.boxShadow = '0 2px 8px rgba(0,0,0,0.2)';
+    toggleBtn.style.fontSize = '16px';
+    toggleBtn.style.fontWeight = 'bold';
+    toggleBtn.style.transition = 'all 0.3s ease';
+    // On hover, make the button slightly larger
+    toggleBtn.addEventListener('mouseenter', () => {
+        toggleBtn.style.width = '36px';
+        toggleBtn.style.backgroundColor = 'var(--primary-color-hover, #1c68d3)';
+    });
+    toggleBtn.addEventListener('mouseleave', () => {
+        toggleBtn.style.width = '32px';
+        toggleBtn.style.backgroundColor = 'var(--primary-color, #2F80ED)';
+    });
+    // On click, open or close the claims overlay
+    toggleBtn.addEventListener('click', () => {
+        // First check if we need to run the analysis
+        const hasRunAnalysis = toggleBtn.getAttribute('data-analysis-run') === 'true';
+        const overlay = document.querySelector('.deepcite-claims-overlay');
+        if (!hasRunAnalysis) {
+            // If analysis hasn't been run yet, run it
+            toggleBtn.setAttribute('data-analysis-run', 'true');
+            toggleBtn.textContent = '⟳'; // Loading indicator
+            toggleBtn.style.opacity = '0.8';
+            // Run the appropriate analysis based on content type
+            if (document.contentType === 'application/pdf' ||
+                window.location.pathname.toLowerCase().endsWith('.pdf')) {
+                // For PDFs
+                chrome.storage.local.get(['openaiKey', 'useLLMExtraction'], result => {
+                    analyzePDF(result.openaiKey, result.useLLMExtraction);
+                    // After analysis complete
+                    toggleBtn.textContent = '»';
+                    toggleBtn.style.opacity = '1';
+                });
+            }
+            else {
+                // For web pages
+                chrome.storage.local.get(['openaiKey', 'useLLMExtraction'], async (result) => {
+                    // Use Content Extractor to get main content
+                    const extractor = new ContentExtractor();
+                    await runExtraction(extractor, result.openaiKey, result.useLLMExtraction);
+                    // After analysis complete
+                    toggleBtn.textContent = '»';
+                    toggleBtn.style.opacity = '1';
+                });
+            }
+        }
+        // Toggle overlay visibility with improved animation
+        if (overlay) {
+            if (overlay.classList.contains('closed') || overlay.style.display === 'none') {
+                // First display the overlay but keep it closed
+                overlay.style.display = 'block';
+                // Force a reflow to ensure the transition works
+                overlay.offsetHeight;
+                // Now remove classes to trigger animation
+                setTimeout(() => {
+                    overlay.classList.remove('closed', 'minimized');
+                    toggleBtn.textContent = '«'; // Change arrow direction
+                }, 10);
+            }
+            else {
+                if (overlay.classList.contains('minimized')) {
+                    // If minimized, expand it
+                    overlay.classList.remove('minimized');
+                    toggleBtn.textContent = '«';
+                }
+                else {
+                    // If expanded, minimize it
+                    overlay.classList.add('minimized');
+                    toggleBtn.textContent = '»';
+                }
+            }
+        }
+    });
+    document.body.appendChild(toggleBtn);
+    return toggleBtn;
+}
 // Add stylesheet immediately
 addStylesheet();
 // Helper function to determine color based on confidence level
@@ -273,9 +369,10 @@ function getConfidenceColor(confidence) {
     return 'var(--low-confidence)'; // Low confidence - red
 }
 // Function to add a claim to the unified claims overlay
-function addClaimToOverlay(overlay, claim, sources) {
+function addClaimToOverlay(overlay, claim, sources = []) {
     const claimDiv = document.createElement('div');
     claimDiv.className = 'deepcite-claim-item';
+    claimDiv.setAttribute('data-claim-id', claim.id.toString());
     // Create the basic claim information
     let claimHTML = `
     ${claim.pdfLocation ? `
@@ -284,38 +381,81 @@ function addClaimToOverlay(overlay, claim, sources) {
       </div>
     ` : ''}
     <div class="deepcite-claim-text">${claim.text}</div>
-    ${claim.confidence !== undefined ? `
-      <div class="deepcite-claim-confidence">
-        <span style="font-weight: bold;">Certainty:</span>
-        <span class="confidence-meter" style="
-          width: ${Math.round(claim.confidence * 100)}px;
-          background-color: ${getConfidenceColor(claim.confidence)};
-        "></span>
-        <span class="confidence-text" style="color: ${getConfidenceColor(claim.confidence)}; font-weight: 500;">
-          ${Math.round(claim.confidence * 100)}%
-        </span>
-      </div>
-    ` : ''}
-    <div class="deepcite-claim-sources">
-      <div class="deepcite-claim-sources-header">Sources (${sources.length}):</div>
+    <div class="deepcite-claim-confidence" style="${claim.confidence === undefined ? 'display: none;' : ''}">
+      <span style="font-weight: bold;">Certainty:</span>
+      <span class="confidence-meter" style="
+        width: ${claim.confidence !== undefined ? Math.round(claim.confidence * 100) : 0}px;
+        background-color: ${claim.confidence !== undefined ? getConfidenceColor(claim.confidence) : 'transparent'};
+      "></span>
+      <span class="confidence-text" style="color: ${claim.confidence !== undefined ? getConfidenceColor(claim.confidence) : 'inherit'}; font-weight: 500;">
+        ${claim.confidence !== undefined ? Math.round(claim.confidence * 100) + '%' : ''}
+      </span>
+    </div>
   `;
-    // Add all sources to the claim
-    sources.forEach((source, index) => {
+    // Add the verify button if sources haven't been checked yet
+    if (sources.length === 0) {
         claimHTML += `
-      <div class="deepcite-claim-source-item">
-        <div class="deepcite-source-title">
-          <a href="${source.url}" target="_blank">${source.title}</a>
-          <span class="deepcite-source-confidence">(${Math.round(source.score * 100)}% confidence)</span>
-        </div>
-        ${index < sources.length - 1 ? '<hr class="deepcite-source-divider">' : ''}
+      <button class="verify-claim-btn" data-claim-id="${claim.id}">
+        Verify
+      </button>
+      <div class="deepcite-claim-sources" style="margin-top: 8px; display: none;">
+        <!-- Sources will go here after user verifies -->
       </div>
     `;
-    });
-    // Close the sources div
-    claimHTML += `</div>`;
+    }
+    else {
+        // If sources are already provided, show them
+        claimHTML += `
+      <div class="deepcite-claim-sources" style="margin-top: 8px;">
+        <div class="deepcite-claim-sources-header">Sources (${sources.length}):</div>
+    `;
+        // Add all sources to the claim or show "no sources" message
+        if (sources.length === 0) {
+            claimHTML += `
+        <div class="deepcite-claim-source-item">
+          <div class="deepcite-source-title">
+            <span style="color: #666; font-style: italic;">No relevant sources found</span>
+          </div>
+        </div>
+      `;
+        }
+        else {
+            sources.forEach((source, index) => {
+                // Skip "no sources" placeholder entries
+                if (source.title === "No relevant sources found" || source.url === "#") {
+                    claimHTML += `
+            <div class="deepcite-claim-source-item">
+              <div class="deepcite-source-title">
+                <span style="color: #666; font-style: italic;">No relevant sources found</span>
+              </div>
+            </div>
+          `;
+                }
+                else {
+                    claimHTML += `
+            <div class="deepcite-claim-source-item">
+              <div class="deepcite-source-title">
+                <a href="${source.url}" target="_blank">${source.title}</a>
+                <span class="deepcite-source-confidence">(${Math.round(source.score * 100)}% confidence)</span>
+              </div>
+              ${source.highlights && source.highlights.length > 0 ?
+                        `<div class="deepcite-source-highlight">"${source.highlights[0]}"</div>` : ''}
+              ${index < sources.length - 1 ? '<hr class="deepcite-source-divider">' : ''}
+            </div>
+          `;
+                }
+            });
+        }
+        // Close the sources div
+        claimHTML += `</div>`;
+    }
     claimDiv.innerHTML = claimHTML;
     // Add click handler to highlight the claim text in the document
-    claimDiv.addEventListener('click', () => {
+    claimDiv.addEventListener('click', (e) => {
+        // Don't trigger if clicking the verify button
+        if (e.target.classList.contains('verify-claim-btn')) {
+            return;
+        }
         // Find the element with the claim text and scroll to it
         const elements = document.querySelectorAll('.exa-claim-highlight');
         for (let i = 0; i < elements.length; i++) {
@@ -331,6 +471,162 @@ function addClaimToOverlay(overlay, claim, sources) {
         }
     });
     overlay.appendChild(claimDiv);
+}
+// Set up a single event listener to handle all "Verify" button clicks
+function setupVerifyButtonHandlers(overlay) {
+    overlay.addEventListener('click', (ev) => {
+        const btn = ev.target;
+        if (btn.classList.contains('verify-claim-btn')) {
+            ev.stopPropagation(); // Prevent triggering the parent claim click event
+            const claimId = btn.getAttribute('data-claim-id');
+            if (!claimId)
+                return;
+            // Disable the button and show loading spinner
+            btn.innerHTML = '<span class="exa-loading" style="margin-right: 8px;"></span>Verifying...';
+            btn.setAttribute('disabled', 'true');
+            btn.style.opacity = '0.8';
+            btn.style.cursor = 'wait';
+            // Find the claim in extractedClaims
+            const targetClaim = extractedClaims.find(c => c.id.toString() === claimId);
+            if (!targetClaim) {
+                btn.textContent = 'Error';
+                return;
+            }
+            // Now call Exa with that single claim
+            chrome.runtime.sendMessage({
+                type: 'VERIFY_CLAIM',
+                claim: targetClaim
+            }, (response) => {
+                if (response && response.success && response.results) {
+                    // Show sources section
+                    const claimItem = btn.closest('.deepcite-claim-item');
+                    const sourcesDiv = claimItem?.querySelector('.deepcite-claim-sources');
+                    if (sourcesDiv) {
+                        // Update the sources div
+                        updateClaimSources(claimId, response.results, sourcesDiv);
+                        sourcesDiv.style.display = 'block';
+                    }
+                    // Remove the verify button
+                    btn.remove();
+                }
+                else if (response && response.error === 'DAILY_LIMIT_REACHED') {
+                    // Handle daily limit reached error
+                    const claimItem = btn.closest('.deepcite-claim-item');
+                    const sourcesDiv = claimItem?.querySelector('.deepcite-claim-sources');
+                    if (sourcesDiv) {
+                        sourcesDiv.style.display = 'block';
+                        sourcesDiv.innerHTML = `
+              <div style="color: #dc3545; padding: 10px; background: rgba(220, 53, 69, 0.1); border-radius: 6px; margin-top: 10px;">
+                <strong>⚠️ ${response.message}</strong>
+                <div style="margin-top: 5px; font-size: 14px;">
+                  You can adjust limits in the extension options.
+                </div>
+              </div>
+            `;
+                    }
+                    // Update button to show options
+                    btn.textContent = 'Options';
+                    btn.removeAttribute('disabled');
+                    btn.style.opacity = '1';
+                    btn.style.cursor = 'pointer';
+                    // Change button to open options page when clicked
+                    btn.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        chrome.runtime.openOptionsPage();
+                    }, { once: true });
+                }
+                else {
+                    // Show general error state
+                    btn.textContent = 'Retry';
+                    btn.removeAttribute('disabled');
+                    btn.style.opacity = '1';
+                    btn.style.cursor = 'pointer';
+                    // Show error message
+                    const claimItem = btn.closest('.deepcite-claim-item');
+                    const sourcesDiv = claimItem?.querySelector('.deepcite-claim-sources');
+                    if (sourcesDiv) {
+                        sourcesDiv.style.display = 'block';
+                        sourcesDiv.innerHTML = `
+              <div style="color: #666; font-style: italic; padding: 10px;">
+                No sources could be found. Please try again later.
+              </div>
+            `;
+                    }
+                }
+            });
+        }
+    });
+}
+// Update the sources section for a claim
+function updateClaimSources(claimId, sources, sourcesDiv) {
+    if (!sources.length) {
+        sourcesDiv.innerHTML = '<div class="deepcite-claim-sources-header">Sources:</div><em>No sources found</em>';
+        return;
+    }
+    // Find the claim to update its confidence
+    const targetClaim = extractedClaims.find(c => c.id.toString() === claimId);
+    if (targetClaim) {
+        // Calculate final confidence based on sources
+        // Simple approach: use the highest source score as confidence
+        const bestSourceScore = Math.max(...sources.map(s => s.score || 0));
+        // Only set confidence if we have valid sources with scores
+        if (bestSourceScore > 0) {
+            targetClaim.confidence = bestSourceScore;
+            // Find the claim element to update the confidence meter
+            const claimItem = sourcesDiv.closest('.deepcite-claim-item');
+            const confidenceContainer = claimItem?.querySelector('.deepcite-claim-confidence');
+            const confidenceMeter = claimItem?.querySelector('.confidence-meter');
+            const confidenceText = claimItem?.querySelector('.confidence-text');
+            if (confidenceContainer && confidenceMeter && confidenceText) {
+                // Show the confidence container if it was hidden
+                confidenceContainer.style.display = 'block';
+                // Animate from 0 to final confidence
+                confidenceMeter.style.width = '0px'; // Start from zero
+                confidenceMeter.style.transition = 'none'; // Reset transition
+                // Force a reflow
+                confidenceMeter.offsetWidth;
+                // First set the color for the text
+                if (targetClaim.confidence !== undefined) {
+                    confidenceText.textContent = Math.round(targetClaim.confidence * 100) + '%';
+                    confidenceText.style.color = getConfidenceColor(targetClaim.confidence);
+                }
+                // Then animate width with a slight delay for better visual effect
+                setTimeout(() => {
+                    if (targetClaim.confidence !== undefined) {
+                        confidenceMeter.style.transition = 'width 1s ease-out';
+                        confidenceMeter.style.backgroundColor = getConfidenceColor(targetClaim.confidence);
+                        confidenceMeter.style.width = Math.round(targetClaim.confidence * 100) + 'px';
+                    }
+                }, 50);
+            }
+        }
+    }
+    let html = `<div class="deepcite-claim-sources-header">Sources (${sources.length}):</div>`;
+    sources.forEach((source, index) => {
+        if (source.title === "No relevant sources found" || source.url === "#") {
+            html += `
+        <div class="deepcite-claim-source-item">
+          <div class="deepcite-source-title">
+            <span style="color: #666; font-style: italic;">No relevant sources found</span>
+          </div>
+        </div>
+      `;
+        }
+        else {
+            html += `
+        <div class="deepcite-claim-source-item">
+          <div class="deepcite-source-title">
+            <a href="${source.url}" target="_blank">${source.title}</a>
+            <span class="deepcite-source-confidence">(${Math.round(source.score * 100)}% confidence)</span>
+          </div>
+          ${source.highlights && source.highlights.length > 0 ?
+                `<div class="deepcite-source-highlight">"${source.highlights[0]}"</div>` : ''}
+          ${index < sources.length - 1 ? '<hr class="deepcite-source-divider">' : ''}
+        </div>
+      `;
+        }
+    });
+    sourcesDiv.innerHTML = html;
 }
 // Function to highlight text and add tooltip with source information
 // This is the core UI component that makes claims interactive
@@ -375,19 +671,22 @@ function highlightClaim(claim, sources) {
                 p.style.boxShadow = '0 1px 3px rgba(0, 0, 0, 0.05)'; // Subtle shadow
                 // Mark this paragraph
                 p.setAttribute('data-claim-id', claim.id.toString());
-                // Add the improved DEEPCITE badge
-                const deepciteBadge = createDeepCiteBadge();
-                // Add confidence score to the badge if available
-                if (claim.confidence !== undefined) {
-                    const confidencePercent = Math.round(claim.confidence * 100);
-                    deepciteBadge.title = `Confidence score: ${confidencePercent}%`;
-                }
-                // Insert at the beginning of the paragraph
-                if (p.firstChild) {
-                    p.insertBefore(deepciteBadge, p.firstChild);
-                }
-                else {
-                    p.appendChild(deepciteBadge);
+                // Check if the paragraph already has a DEEPCITE badge to avoid duplicates
+                if (!p.querySelector('.deepcite-badge')) {
+                    // Add the improved DEEPCITE badge only if one doesn't already exist
+                    const deepciteBadge = createDeepCiteBadge();
+                    // Add confidence score to the badge if available
+                    if (claim.confidence !== undefined) {
+                        const confidencePercent = Math.round(claim.confidence * 100);
+                        deepciteBadge.title = `Confidence score: ${confidencePercent}%`;
+                    }
+                    // Insert at the beginning of the paragraph
+                    if (p.firstChild) {
+                        p.insertBefore(deepciteBadge, p.firstChild);
+                    }
+                    else {
+                        p.appendChild(deepciteBadge);
+                    }
                 }
                 console.log('Applied enhanced styles to paragraph');
             }
@@ -573,10 +872,9 @@ async function createClaimsOverlay(isPDF = false) {
     let overlay = document.querySelector('.deepcite-claims-overlay');
     console.log('Existing overlay found:', !!overlay);
     if (overlay) {
-        // If overlay exists but is closed or minimized, reopen it
-        overlay.classList.remove('closed', 'minimized');
-        overlay.style.display = 'block';
-        console.log('Reopening existing overlay');
+        // If overlay exists, keep it in its current state (closed/minimized)
+        // We'll control visibility with the toggle button now
+        console.log('Using existing overlay');
         // Update the header to show we're processing again
         const headerSmall = overlay.querySelector('.deepcite-claims-header small');
         if (headerSmall) {
@@ -630,15 +928,9 @@ async function createClaimsOverlay(isPDF = false) {
     overlay.appendChild(header);
     // Make the overlay draggable using the header as the handle
     makeDraggable(overlay, header);
-    // Add a "fully close" button at the bottom of the panel
+    // Add a "fully close" button at the bottom of the panel with improved styling
     const closeCompletelyButton = document.createElement('button');
-    closeCompletelyButton.style.display = 'block';
-    closeCompletelyButton.style.margin = '20px auto 10px auto';
-    closeCompletelyButton.style.padding = '8px 16px';
-    closeCompletelyButton.style.backgroundColor = '#f2f2f2';
-    closeCompletelyButton.style.border = '1px solid #ddd';
-    closeCompletelyButton.style.borderRadius = '4px';
-    closeCompletelyButton.style.cursor = 'pointer';
+    closeCompletelyButton.className = 'deepcite-close-panel-button';
     closeCompletelyButton.textContent = 'Close Panel';
     closeCompletelyButton.addEventListener('click', () => {
         overlay.classList.add('closed');
@@ -653,6 +945,9 @@ async function createClaimsOverlay(isPDF = false) {
     });
     overlay.appendChild(closeCompletelyButton);
     document.body.appendChild(overlay);
+    // Hide the overlay by default - will be shown via the toggle button
+    overlay.style.display = 'none';
+    overlay.classList.add('closed');
     return overlay;
 }
 /**
@@ -719,143 +1014,201 @@ function cleanupEphemeralElements() {
     const indicators = document.querySelectorAll('[data-temporary-indicator]');
     indicators.forEach(indicator => indicator.remove());
 }
-async function analyzePDF(openaiKey) {
+async function analyzePDF(openaiKey, useLLMExtraction = true) {
     const overlay = await createClaimsOverlay(true);
-    const analyzeButton = document.createElement('button');
-    analyzeButton.className = 'analyze-pdf-button';
-    analyzeButton.textContent = 'Analyze PDF';
-    document.body.appendChild(analyzeButton);
     // Get the Exa API key from storage
     const { exaKey } = await new Promise(resolve => {
         chrome.storage.local.get(['exaKey'], (result) => resolve(result));
     });
     // Check for missing API keys
     if (!exaKey || exaKey === '') {
-        analyzeButton.style.backgroundColor = '#dc3545';
-        analyzeButton.title = 'Exa API key is missing. Please set it in the extension options.';
-        analyzeButton.addEventListener('click', () => {
-            alert('Please set your Exa API key in the extension options before analyzing.');
-            chrome.runtime.openOptionsPage();
-        });
+        console.error('Exa API key is missing');
+        // Update the overlay to show an error
+        const header = overlay.querySelector('.deepcite-claims-header small');
+        if (header) {
+            header.textContent = 'API key missing. Please set in options.';
+        }
+        // Add an error message to the overlay
+        const errorDiv = document.createElement('div');
+        errorDiv.className = 'deepcite-claim-item';
+        errorDiv.innerHTML = `
+      <div class="deepcite-claim-text" style="color: #dc3545; text-align: center; padding: 15px;">
+        Exa API key is missing. Please set it in the extension options.
+      </div>
+      <button id="open-options-btn" style="margin: 10px auto; display: block; padding: 8px 16px; background: #f8f9fa; border: 1px solid #eee; color: #333; cursor: pointer; border-radius: 6px;">
+        Open Options
+      </button>
+    `;
+        overlay.appendChild(errorDiv);
+        // Add click handler for the options button
+        const optionsBtn = errorDiv.querySelector('#open-options-btn');
+        if (optionsBtn) {
+            optionsBtn.addEventListener('click', () => {
+                chrome.runtime.openOptionsPage();
+            });
+        }
         return;
     }
-    analyzeButton.addEventListener('click', async () => {
-        try {
-            analyzeButton.textContent = 'Analyzing...';
-            analyzeButton.disabled = true;
-            const pdfHandler = new PDFHandler(window.location.href);
-            await pdfHandler.init();
-            const content = await pdfHandler.getAllContent();
-            // Create a temporary status indicator
-            const statusIndicator = document.createElement('div');
-            statusIndicator.setAttribute('data-temporary-indicator', 'true');
-            statusIndicator.style.position = 'fixed';
-            statusIndicator.style.top = '20px';
-            statusIndicator.style.right = '20px';
-            statusIndicator.style.padding = '12px 16px';
-            statusIndicator.style.backgroundColor = 'var(--primary-color)';
-            statusIndicator.style.color = 'white';
-            statusIndicator.style.zIndex = '99999';
-            statusIndicator.style.borderRadius = 'var(--border-radius-md)';
-            statusIndicator.style.fontWeight = 'bold';
-            statusIndicator.style.boxShadow = '0 4px 12px rgba(0,0,0,0.15)';
-            statusIndicator.style.transition = 'all 0.5s cubic-bezier(0.16, 1, 0.3, 1)';
-            statusIndicator.style.fontFamily = 'var(--font-family)';
-            statusIndicator.style.fontSize = '14px';
-            statusIndicator.style.display = 'flex';
-            statusIndicator.style.alignItems = 'center';
-            statusIndicator.style.opacity = '0';
-            statusIndicator.style.transform = 'translateY(-10px)';
-            statusIndicator.innerHTML = '<span style="margin-right: 8px; font-size: 16px;">📄</span> PDF Analysis Active';
-            document.body.appendChild(statusIndicator);
-            // Animate in
-            setTimeout(() => {
-                statusIndicator.style.opacity = '1';
-                statusIndicator.style.transform = 'translateY(0)';
-            }, 10);
-            // Remove status indicator after 5 seconds with animation
-            setTimeout(() => {
-                statusIndicator.style.opacity = '0';
-                statusIndicator.style.transform = 'translateY(-10px)';
-                setTimeout(() => statusIndicator.remove(), 500);
-            }, 5000);
-            let useLLM = false;
-            // Try to use LLM extraction if OpenAI key is available
-            if (openaiKey && openaiKey !== '') {
-                try {
-                    console.log('Testing LLM extraction for PDF...');
-                    const llmExtractor = new LLMExtractor(openaiKey);
-                    const testResult = await llmExtractor.extractClaimsFromChunk("This is a test claim.");
-                    if (testResult && testResult.claims.length > 0) {
-                        console.log('LLM extraction successful, will use it for PDF content');
-                        useLLM = true;
-                        // Process full content with LLM extraction
-                        const fullResults = await llmExtractor.extractClaims(content);
-                        if (fullResults && fullResults.claims.length > 0) {
-                            // Add context information to each claim
-                            const claims = fullResults.claims.map((text, index) => ({
-                                id: index + 1,
-                                text,
-                                cleanText: text.replace(/\[\d+\]/g, ''), // Remove reference numbers if present
-                                context: {
-                                    page: 1, // We'll update this later
-                                    paragraph: 0
-                                },
-                                relevance: 0.8, // Default high relevance since LLM already filtered
-                                confidence: fullResults.confidence[index] || 0.7 // Use confidence from LLM or default
-                            }));
-                            // Update the header of the overlay
-                            const header = overlay.querySelector('.deepcite-claims-header small');
-                            if (header) {
-                                header.textContent = `${claims.length} claims found`;
-                            }
-                            overlay.style.display = 'block';
-                            processPDFClaims(claims, pdfHandler, overlay);
+    // Create a temporary status indicator for analysis
+    const statusIndicator = document.createElement('div');
+    statusIndicator.setAttribute('data-temporary-indicator', 'true');
+    statusIndicator.style.position = 'fixed';
+    statusIndicator.style.top = '20px';
+    statusIndicator.style.right = '20px';
+    statusIndicator.style.padding = '12px 16px';
+    statusIndicator.style.backgroundColor = 'var(--primary-color)';
+    statusIndicator.style.color = 'white';
+    statusIndicator.style.zIndex = '99999';
+    statusIndicator.style.borderRadius = 'var(--border-radius-md)';
+    statusIndicator.style.fontWeight = 'bold';
+    statusIndicator.style.boxShadow = '0 4px 12px rgba(0,0,0,0.15)';
+    statusIndicator.style.transition = 'all 0.5s cubic-bezier(0.16, 1, 0.3, 1)';
+    statusIndicator.style.fontFamily = 'var(--font-family)';
+    statusIndicator.style.fontSize = '14px';
+    statusIndicator.style.display = 'flex';
+    statusIndicator.style.alignItems = 'center';
+    statusIndicator.style.opacity = '0';
+    statusIndicator.style.transform = 'translateY(-10px)';
+    statusIndicator.innerHTML = '<span style="margin-right: 8px; font-size: 16px;">📄</span> Analyzing PDF...';
+    document.body.appendChild(statusIndicator);
+    // Animate in
+    setTimeout(() => {
+        statusIndicator.style.opacity = '1';
+        statusIndicator.style.transform = 'translateY(0)';
+    }, 10);
+    try {
+        const pdfHandler = new PDFHandler(window.location.href);
+        await pdfHandler.init();
+        const content = await pdfHandler.getAllContent();
+        let useAI = false;
+        // Try to use LLM extraction if OpenAI key is available and LLM extraction is enabled
+        if (openaiKey && openaiKey !== '' && useLLMExtraction) {
+            try {
+                console.log('Testing LLM extraction for PDF...');
+                const llmExtractor = new LLMExtractor(openaiKey);
+                const testResult = await llmExtractor.extractClaimsFromChunk("This is a test claim.");
+                if (testResult && testResult.claims.length > 0) {
+                    console.log('LLM extraction successful, will use it for PDF content');
+                    useAI = true;
+                    // Add a temporary indicator showing which extraction mode is used
+                    const extractionIndicator = document.createElement('div');
+                    extractionIndicator.setAttribute('data-temporary-indicator', 'true');
+                    extractionIndicator.style.position = 'fixed';
+                    extractionIndicator.style.bottom = '20px';
+                    extractionIndicator.style.right = '20px';
+                    extractionIndicator.style.padding = '8px 12px';
+                    extractionIndicator.style.backgroundColor = 'rgba(47, 128, 237, 0.8)';
+                    extractionIndicator.style.color = 'white';
+                    extractionIndicator.style.zIndex = '99998';
+                    extractionIndicator.style.borderRadius = 'var(--border-radius-md)';
+                    extractionIndicator.style.fontWeight = '500';
+                    extractionIndicator.style.fontSize = '13px';
+                    extractionIndicator.style.boxShadow = '0 2px 8px rgba(0,0,0,0.15)';
+                    extractionIndicator.style.fontFamily = 'var(--font-family)';
+                    extractionIndicator.innerHTML = '🧠 Using AI Extraction';
+                    document.body.appendChild(extractionIndicator);
+                    // Automatically remove after 5 seconds
+                    setTimeout(() => extractionIndicator.remove(), 5000);
+                    // Process full content with LLM extraction
+                    const fullResults = await llmExtractor.extractClaims(content);
+                    if (fullResults && fullResults.claims.length > 0) {
+                        // Add context information to each claim
+                        const claims = fullResults.claims.map((text, index) => ({
+                            id: index + 1,
+                            text,
+                            cleanText: text.replace(/\[\d+\]/g, ''), // Remove reference numbers if present
+                            context: {
+                                page: 1, // We'll update this later
+                                paragraph: 0
+                            },
+                            relevance: 0.8, // Default high relevance since LLM already filtered
+                            confidence: undefined // Will be set during verification
+                        }));
+                        // Update the header of the overlay
+                        const header = overlay.querySelector('.deepcite-claims-header small');
+                        if (header) {
+                            header.textContent = `${claims.length} claims found (AI-based)`;
                         }
-                        else {
-                            console.log('LLM extraction returned no claims, falling back to rule-based');
-                            useLLM = false;
-                        }
+                        // Process the claims
+                        processPDFClaims(claims, pdfHandler, overlay);
                     }
                     else {
-                        console.log('LLM test failed, falling back to rule-based extraction');
+                        console.log('LLM extraction returned no claims, falling back to rule-based');
+                        useAI = false;
                     }
                 }
-                catch (error) {
-                    console.error('LLM extraction failed, using rule-based approach:', error);
-                    useLLM = false;
+                else {
+                    console.log('LLM test failed, falling back to rule-based extraction');
                 }
+            }
+            catch (error) {
+                console.error('LLM extraction failed, using rule-based approach:', error);
+                useAI = false;
+            }
+        }
+        else {
+            if (useLLMExtraction && (!openaiKey || openaiKey === '')) {
+                console.log('LLM extraction enabled but OpenAI key missing, using rule-based extraction');
             }
             else {
-                console.log('No OpenAI key provided, using rule-based extraction only');
+                console.log('Using rule-based extraction (LLM extraction disabled in settings)');
             }
-            // Use rule-based approach if LLM failed or wasn't attempted
-            if (!useLLM) {
-                console.log('Using rule-based extraction for PDF');
-                const extractor = new ContentExtractor();
-                const extractionResult = await extractor.extractClaims(10);
-                // Add confidence scores to all claims
-                for (const claim of extractionResult.claims) {
-                    claim.confidence = 0.7; // Set a default confidence score
-                }
-                // Update the header of the overlay
-                const header = overlay.querySelector('.deepcite-claims-header small');
-                if (header) {
-                    header.textContent = `${extractionResult.claims.length} claims found`;
-                }
-                overlay.style.display = 'block';
-                processPDFClaims(extractionResult.claims, pdfHandler, overlay);
+        }
+        // Use rule-based approach if LLM failed or wasn't attempted
+        if (!useAI) {
+            console.log('Using rule-based extraction for PDF');
+            // Add a temporary indicator showing which extraction mode is used
+            const extractionIndicator = document.createElement('div');
+            extractionIndicator.setAttribute('data-temporary-indicator', 'true');
+            extractionIndicator.style.position = 'fixed';
+            extractionIndicator.style.bottom = '20px';
+            extractionIndicator.style.right = '20px';
+            extractionIndicator.style.padding = '8px 12px';
+            extractionIndicator.style.backgroundColor = 'rgba(100, 100, 100, 0.8)';
+            extractionIndicator.style.color = 'white';
+            extractionIndicator.style.zIndex = '99998';
+            extractionIndicator.style.borderRadius = 'var(--border-radius-md)';
+            extractionIndicator.style.fontWeight = '500';
+            extractionIndicator.style.fontSize = '13px';
+            extractionIndicator.style.boxShadow = '0 2px 8px rgba(0,0,0,0.15)';
+            extractionIndicator.style.fontFamily = 'var(--font-family)';
+            extractionIndicator.innerHTML = '📊 Using Rule-Based Extraction';
+            document.body.appendChild(extractionIndicator);
+            // Automatically remove after 5 seconds
+            setTimeout(() => extractionIndicator.remove(), 5000);
+            const extractor = new ContentExtractor();
+            const extractionResult = await extractor.extractClaims(10);
+            // Don't set default confidence scores - they'll be set during verification
+            for (const claim of extractionResult.claims) {
+                claim.confidence = undefined; // Will be set during verification
             }
-            analyzeButton.style.display = 'none';
+            // Update the header of the overlay
+            const header = overlay.querySelector('.deepcite-claims-header small');
+            if (header) {
+                header.textContent = `${extractionResult.claims.length} claims found (rule-based)`;
+            }
+            processPDFClaims(extractionResult.claims, pdfHandler, overlay);
         }
-        catch (error) {
-            console.error('PDF analysis failed:', error);
-            analyzeButton.textContent = 'Analysis Failed';
-        }
-    });
+        // Update status indicator to show completion
+        statusIndicator.innerHTML = '<span style="margin-right: 8px; font-size: 16px;">✓</span> PDF Analysis Complete';
+    }
+    catch (error) {
+        console.error('PDF analysis failed:', error);
+        // Update status indicator to show error
+        statusIndicator.style.backgroundColor = '#dc3545';
+        statusIndicator.innerHTML = '<span style="margin-right: 8px; font-size: 16px;">❌</span> PDF Analysis Failed';
+    }
+    // Remove status indicator after animation
+    setTimeout(() => {
+        statusIndicator.style.opacity = '0';
+        statusIndicator.style.transform = 'translateY(-10px)';
+        setTimeout(() => statusIndicator.remove(), 500);
+    }, 5000);
 }
 // Helper function to process PDF claims
 async function processPDFClaims(claims, pdfHandler, overlay) {
+    // Store the PDF claims globally to access from verify button handlers
+    extractedClaims = [];
     // Sort claims by confidence for better presentation
     const sortedClaims = [...claims].sort((a, b) => {
         const confA = a.confidence !== undefined ? a.confidence : 0;
@@ -877,186 +1230,102 @@ async function processPDFClaims(claims, pdfHandler, overlay) {
         // Find location in PDF to add to claim data
         const location = pdfHandler.findTextLocation(claim.cleanText);
         const pdfClaim = { ...claim, pdfLocation: location };
-        chrome.runtime.sendMessage({
-            type: 'VERIFY_CLAIM',
-            claim: pdfClaim
-        }, response => {
-            if (response && response.success && response.results && response.results.length > 0) {
-                const sources = response.results;
-                // Add to the overlay using our unified function
-                addClaimToOverlay(overlay, pdfClaim, sources);
-                // Ensure the overlay is visible whenever results are added
-                overlay.classList.remove('closed', 'minimized');
-                overlay.style.display = 'block';
-                // For PDFs, override the click handler to navigate to the page
-                const lastClaimItem = overlay.querySelector('.deepcite-claim-item:last-child');
-                if (lastClaimItem && location) {
-                    lastClaimItem.addEventListener('click', () => {
-                        // Most PDF viewers support #page=N for navigation
-                        window.location.hash = `#page=${location.pageNum}`;
-                    });
+        // Add to our global claims collection
+        extractedClaims.push(pdfClaim);
+        // Add to the overlay with the verify button
+        addClaimToOverlay(overlay, pdfClaim);
+        // For PDFs, override the click handler to navigate to the page
+        const claimItem = overlay.querySelector(`.deepcite-claim-item[data-claim-id="${pdfClaim.id}"]`);
+        if (claimItem && location) {
+            claimItem.addEventListener('click', (e) => {
+                // Don't navigate if clicking the verify button
+                if (e.target.classList.contains('verify-claim-btn')) {
+                    return;
                 }
-            }
-            else {
-                // Use dummy sources for claims when API fails
-                const dummySources = [
-                    {
-                        url: 'https://en.wikipedia.org/wiki/Main_Page',
-                        title: 'Wikipedia - Related Article',
-                        score: 0.8
-                    },
-                    {
-                        url: 'https://www.nationalgeographic.com/',
-                        title: 'National Geographic',
-                        score: 0.7
-                    }
-                ];
-                // Add to the overlay with dummy sources
-                addClaimToOverlay(overlay, pdfClaim, dummySources);
-                // Ensure the overlay is visible whenever results are added
-                overlay.classList.remove('closed', 'minimized');
-                overlay.style.display = 'block';
-            }
-        });
+                // Most PDF viewers support #page=N for navigation
+                window.location.hash = `#page=${location.pageNum}`;
+            });
+        }
     }
+    // Set up the verify button handlers
+    setupVerifyButtonHandlers(overlay);
+    // Ensure the overlay is visible
+    overlay.classList.remove('closed', 'minimized');
+    overlay.style.display = 'block';
 }
 // Main initialization
-chrome.storage.local.get(['openaiKey', 'exaKey', 'highlightsEnabled'], async (result) => {
-    // Log the key availability (but not the actual value for security)
+chrome.storage.local.get(['openaiKey', 'exaKey', 'highlightsEnabled', 'useLLMExtraction'], async (result) => {
+    // Log the key availability and settings (but not the actual value for security)
     console.log('OpenAI key available:', !!result.openaiKey && result.openaiKey !== '');
     console.log('Exa key available:', !!result.exaKey && result.exaKey !== '');
     console.log('Highlights enabled:', result.highlightsEnabled !== false); // Default to true if undefined
-    if (await isPDF()) {
-        analyzePDF(result.openaiKey);
-        return;
-    }
-    // Create analyze button for web pages
-    // Manually trigger claim extraction only after user clicks "Analyze Webpage"
-    // to avoid automatically scanning on page load and respect user privacy
-    const analyzeWebButton = document.createElement('button');
-    analyzeWebButton.className = 'analyze-webpage-button';
-    analyzeWebButton.textContent = 'Analyze Webpage';
-    document.body.appendChild(analyzeWebButton);
-    // Check for missing API keys
+    console.log('Using LLM extraction:', result.useLLMExtraction === true && !!result.openaiKey);
+    // Create the overlay ahead of time (it will remain hidden)
+    const isPdfPage = await isPDF();
+    await createClaimsOverlay(isPdfPage);
+    // Create the sidebar toggle button (which replaces the analyze buttons)
+    const toggleBtn = createSidebarToggle();
+    // Check for missing API keys - we'll handle this when the toggle is clicked
     if (!result.exaKey || result.exaKey === '') {
-        analyzeWebButton.style.backgroundColor = '#dc3545';
-        analyzeWebButton.title = 'Exa API key is missing. Please set it in the extension options.';
-        analyzeWebButton.addEventListener('click', () => {
-            alert('Please set your Exa API key in the extension options before analyzing.');
-            chrome.runtime.openOptionsPage();
-        });
-        return;
+        console.warn('Exa API key is missing');
+        // We'll still show the button, but it will display an error when clicked
+        toggleBtn.title = 'DeepCite (API key missing)';
+        toggleBtn.style.backgroundColor = '#dc3545'; // Red to indicate error
+        // Add an alert message to the sidebar about missing API key
+        const overlay = document.querySelector('.deepcite-claims-overlay');
+        if (overlay) {
+            const apiErrorDiv = document.createElement('div');
+            apiErrorDiv.className = 'deepcite-claim-item';
+            apiErrorDiv.innerHTML = `
+        <div style="color: #dc3545; padding: 15px; background: rgba(220, 53, 69, 0.1); border-radius: 6px; text-align: center;">
+          <span style="font-size: 24px; display: block; margin-bottom: 10px;">⚠️</span>
+          <strong>Exa API Key Missing</strong>
+          <p style="margin: 10px 0; font-size: 14px;">
+            DeepCite requires an Exa API key to verify claims. Please add your key in the options page.
+          </p>
+          <button id="open-options-btn" style="margin: 10px auto; display: block; padding: 8px 16px; background: #f8f9fa; border: 1px solid #eee; color: #333; cursor: pointer; border-radius: 6px;">
+            Open Options
+          </button>
+        </div>
+      `;
+            overlay.insertBefore(apiErrorDiv, overlay.querySelector('.deepcite-claim-item'));
+            // Add click handler for the options button
+            const optionsBtn = apiErrorDiv.querySelector('#open-options-btn');
+            if (optionsBtn) {
+                optionsBtn.addEventListener('click', () => {
+                    chrome.runtime.openOptionsPage();
+                });
+            }
+        }
     }
-    analyzeWebButton.addEventListener('click', async () => {
-        // Perform analysis only when clicked - this is the single entry point for web analysis
-        console.log('Analyze Webpage button clicked');
-        analyzeWebButton.textContent = 'Analyzing (please wait)...';
-        analyzeWebButton.disabled = true;
-        // Add visible elements to show extension is working
-        console.log('Adding DeepCite indicators');
-        // Main indicator
-        const mainIndicator = document.createElement('div');
-        mainIndicator.setAttribute('data-temporary-indicator', 'true');
-        mainIndicator.style.position = 'fixed';
-        mainIndicator.style.top = '20px';
-        mainIndicator.style.right = '20px';
-        mainIndicator.style.padding = '12px 16px';
-        mainIndicator.style.backgroundColor = 'var(--primary-color)';
-        mainIndicator.style.color = 'white';
-        mainIndicator.style.fontFamily = 'var(--font-family)';
-        mainIndicator.style.fontWeight = 'bold';
-        mainIndicator.style.fontSize = '14px';
-        mainIndicator.style.zIndex = '99999';
-        mainIndicator.style.borderRadius = 'var(--border-radius-md)';
-        mainIndicator.style.boxShadow = '0 4px 12px rgba(0,0,0,0.15)';
-        mainIndicator.style.display = 'flex';
-        mainIndicator.style.alignItems = 'center';
-        mainIndicator.style.gap = '8px';
-        mainIndicator.style.opacity = '0';
-        mainIndicator.style.transform = 'translateY(-10px)';
-        mainIndicator.style.transition = 'all 0.4s cubic-bezier(0.16, 1, 0.3, 1)';
-        mainIndicator.innerHTML = '<span style="display: flex; align-items: center; margin-right: 8px;">🔍</span>DeepCite Activated';
-        document.body.appendChild(mainIndicator);
-        // Smooth animation in
-        setTimeout(() => {
-            mainIndicator.style.opacity = '1';
-            mainIndicator.style.transform = 'translateY(0)';
-        }, 10);
-        // Add a subtle pulse animation after 1 second
-        setTimeout(() => {
-            mainIndicator.style.transform = 'translateY(-3px) scale(1.03)';
-            setTimeout(() => {
-                mainIndicator.style.transform = 'translateY(0) scale(1)';
-            }, 300);
-        }, 1000);
-        // Remove the indicator after animation is complete
-        setTimeout(() => {
-            mainIndicator.style.opacity = '0';
-            mainIndicator.style.transform = 'translateY(-10px)';
-            setTimeout(() => {
-                mainIndicator.remove();
-            }, 500);
-        }, 5000);
-        try {
-            // Get OpenAI key from storage
-            const { openaiKey } = await new Promise(resolve => {
-                chrome.storage.local.get(['openaiKey'], (result) => resolve(result));
-            });
-            console.log('Using OpenAI key:', !!openaiKey && openaiKey !== '');
-            // Use Content Extractor to get main content
-            const extractor = new ContentExtractor();
-            const paragraphs = extractor.getMainContent().join('\n\n');
-            if (openaiKey && openaiKey !== '') {
-                try {
-                    // Try to use LLM extraction if OpenAI key is available
-                    const llmExtractor = new LLMExtractor(openaiKey);
-                    // Test the LLM extractor with a simple claim
-                    const testResult = await llmExtractor.extractClaimsFromChunk("This is a test claim.");
-                    if (testResult && testResult.claims.length > 0) {
-                        console.log('LLM extraction successful, using for full content');
-                        // Will use LLM extraction in runExtraction
-                    }
-                    else {
-                        console.log('LLM test failed, falling back to rule-based extraction');
-                    }
-                }
-                catch (error) {
-                    console.error('LLM extraction test failed, using rule-based approach:', error);
-                }
-            }
-            else {
-                console.log('No OpenAI key provided, using rule-based extraction only');
-            }
-            // Process with extraction
-            console.log('Processing content extraction');
-            await runExtraction(extractor);
-            analyzeWebButton.textContent = 'Analysis Complete';
-        }
-        catch (error) {
-            console.error('Analysis failed:', error);
-            analyzeWebButton.textContent = 'Analysis Failed';
-        }
-        setTimeout(() => {
-            analyzeWebButton.style.display = 'none';
-        }, 2000);
-    });
 });
-// Function to create a demonstration highlight
-/**
- * Add a claim to the overlay panel only - do not create floating highlights
- * @param claim The claim to add to the interface
- * @param sources Sources for the claim
- * @returns null (does not return a paragraph element)
- */
-function createDemoHighlight(claim, sources) {
-    // This function no longer creates floating highlights
-    // Instead, it only updates the claims overlay panel
-    console.log('Skipping creation of floating demo highlight for claim:', claim.text.substring(0, 50) + '...');
-    // Return null to indicate no element was created
-    return null;
-}
-async function runExtraction(extractor) {
-    console.log('Running rule-based extraction');
+// Any function that would create demonstration highlights with dummy sources
+// has been completely removed - we now only display real API-verified results
+async function runExtraction(extractor, openaiKey = '', useLLMExtraction = false) {
+    console.log('Running extraction, LLM enabled:', useLLMExtraction && !!openaiKey);
+    // Show which extraction mode is being used
+    const extractionMode = (useLLMExtraction && !!openaiKey) ?
+        { text: '🧠 Using AI Extraction', color: 'rgba(47, 128, 237, 0.8)' } :
+        { text: '📊 Using Rule-Based Extraction', color: 'rgba(100, 100, 100, 0.8)' };
+    // Add a temporary indicator showing the extraction mode
+    const extractionIndicator = document.createElement('div');
+    extractionIndicator.setAttribute('data-temporary-indicator', 'true');
+    extractionIndicator.style.position = 'fixed';
+    extractionIndicator.style.bottom = '20px';
+    extractionIndicator.style.right = '20px';
+    extractionIndicator.style.padding = '8px 12px';
+    extractionIndicator.style.backgroundColor = extractionMode.color;
+    extractionIndicator.style.color = 'white';
+    extractionIndicator.style.zIndex = '99998';
+    extractionIndicator.style.borderRadius = 'var(--border-radius-md)';
+    extractionIndicator.style.fontWeight = '500';
+    extractionIndicator.style.fontSize = '13px';
+    extractionIndicator.style.boxShadow = '0 2px 8px rgba(0,0,0,0.15)';
+    extractionIndicator.style.fontFamily = 'var(--font-family)';
+    extractionIndicator.innerHTML = extractionMode.text;
+    document.body.appendChild(extractionIndicator);
+    // Automatically remove after 5 seconds
+    setTimeout(() => extractionIndicator.remove(), 5000);
     // Create a temporary status indicator
     const statusIndicator = document.createElement('div');
     statusIndicator.setAttribute('data-temporary-indicator', 'true');
@@ -1118,6 +1387,11 @@ async function runExtraction(extractor) {
     // Highlight up to 2 paragraphs maximum
     const paragraphsToHighlight = candidateParagraphs.slice(0, Math.min(2, candidateParagraphs.length));
     paragraphsToHighlight.forEach(p => {
+        // Skip already marked paragraphs
+        if (p.querySelector('.deepcite-badge') || p.getAttribute('data-claim-id')) {
+            console.log('Paragraph already has a DEEPCITE badge, skipping');
+            return;
+        }
         // Create a wrapper around the paragraph to allow removal
         const wrapper = document.createElement('div');
         wrapper.style.position = 'relative';
@@ -1181,147 +1455,92 @@ async function runExtraction(extractor) {
     if (paragraphsToHighlight.length === 0) {
         console.log('No factual paragraphs detected for demonstration');
     }
-    // Extract claims using rule-based approach
-    const result = await extractor.extractClaims(10); // Increase to 10 claims for better results
-    console.log('Rule-based extraction found claims:', result.claims.length);
+    // Determine whether to use AI-based extraction
+    let result;
+    if (useLLMExtraction && openaiKey && openaiKey !== '') {
+        try {
+            console.log('Attempting LLM-based claim extraction for web page');
+            const llmExtractor = new LLMExtractor(openaiKey);
+            // Get the main content from the page
+            const contentBlocks = extractor.getMainContent();
+            const content = contentBlocks.join('\n\n');
+            // Use LLM to extract claims
+            const llmResults = await llmExtractor.extractClaims(content);
+            if (llmResults && llmResults.claims.length > 0) {
+                console.log('LLM extraction successful, found claims:', llmResults.claims.length);
+                // Convert LLM results to our Claim format
+                const claims = llmResults.claims.map((text, index) => ({
+                    id: index + 1,
+                    text,
+                    cleanText: text.replace(/\[\d+\]/g, ''), // Remove reference numbers if present
+                    context: {
+                        page: 1,
+                        paragraph: 0
+                    },
+                    relevance: 0.8, // Default high relevance since LLM already filtered
+                    confidence: undefined // Will be set during verification
+                }));
+                result = { claims, totalProcessed: contentBlocks.length };
+            }
+            else {
+                console.log('LLM extraction returned no claims, falling back to rule-based');
+                result = await extractor.extractClaims(10);
+            }
+        }
+        catch (error) {
+            console.error('LLM extraction failed, using rule-based approach:', error);
+            result = await extractor.extractClaims(10);
+        }
+    }
+    else {
+        // Use rule-based approach
+        console.log('Using rule-based claim extraction for web page');
+        result = await extractor.extractClaims(10); // Increase to 10 claims for better results
+    }
+    // Store claims globally for later access by verify buttons
+    extractedClaims = result.claims;
+    console.log('Extraction found claims:', result.claims.length);
     // Create claims overlay
     const overlay = await createClaimsOverlay(false);
     overlay.style.display = 'block';
     if (result.claims.length > 0) {
         const header = overlay.querySelector('.deepcite-claims-header small');
         if (header) {
-            header.textContent = `${result.claims.length} claims found`;
+            const extractionMethod = (useLLMExtraction && openaiKey && openaiKey !== '') ? 'AI-based' : 'rule-based';
+            header.textContent = `${result.claims.length} claims found (${extractionMethod})`;
         }
-        // Process actual claims
+        // Process each claim
         for (const claim of result.claims) {
-            // Add dummy confidence for consistent display
-            claim.confidence = Math.random() < 0.3 ? 0.4 : Math.random() < 0.5 ? 0.6 : 0.8;
-            // Create dummy sources in case API fails
-            const dummySources = [
-                {
-                    url: 'https://en.wikipedia.org/wiki/Main_Page',
-                    title: 'Wikipedia - Related Article',
-                    score: 0.8
-                },
-                {
-                    url: 'https://www.nationalgeographic.com/',
-                    title: 'National Geographic',
-                    score: 0.7
-                },
-                {
-                    url: 'https://www.scientificamerican.com/',
-                    title: 'Scientific American',
-                    score: 0.75
-                }
-            ];
-            try {
-                // Try to verify with API but use fallback immediately if it fails
-                chrome.runtime.sendMessage({
-                    type: 'VERIFY_CLAIM',
-                    claim
-                }, response => {
-                    if (response && response.success && response.results && response.results.length > 0) {
-                        console.log('Successfully verified claim with API');
-                        highlightClaim(claim, response.results);
-                        addClaimToOverlay(overlay, claim, response.results);
-                        // Ensure overlay is visible
-                        overlay.classList.remove('closed', 'minimized');
-                        overlay.style.display = 'block';
-                    }
-                    else {
-                        console.log('Using dummy sources for claim');
-                        highlightClaim(claim, dummySources);
-                        addClaimToOverlay(overlay, claim, dummySources);
-                        // Ensure overlay is visible
-                        overlay.classList.remove('closed', 'minimized');
-                        overlay.style.display = 'block';
-                    }
-                });
-                // Use a fallback approach only if we need to ensure the overlay has content
-                setTimeout(() => {
-                    // Check if the claim is already in the overlay
-                    const existingClaimInOverlay = overlay.querySelector(`[data-claim-id="${claim.id}"]`);
-                    if (!existingClaimInOverlay) {
-                        // Only add to overlay without creating demo highlights that might cause floating text
-                        addClaimToOverlay(overlay, claim, dummySources);
-                        console.log('Added fallback claim to overlay');
-                    }
-                    // Ensure overlay is visible
-                    overlay.classList.remove('closed', 'minimized');
-                    overlay.style.display = 'block';
-                }, 500);
-            }
-            catch (err) {
-                console.log('Error during claim verification, using dummy sources');
-                // Only try to highlight if text exists on the page
-                const highlighted = highlightClaim(claim, dummySources);
-                if (!highlighted) {
-                    console.log('No matching content found for claim, only adding to sidebar');
-                }
-                // Add to the overlay regardless
-                addClaimToOverlay(overlay, claim, dummySources);
-                // Ensure overlay is visible
-                overlay.classList.remove('closed', 'minimized');
-                overlay.style.display = 'block';
-            }
+            // Add a default confidence score if one isn't present
+            claim.confidence = undefined; // Will be set during verification
+            // Try to highlight the claim in the text
+            highlightClaim(claim, []);
+            // Add the claim to overlay with a verify button (not sources yet)
+            addClaimToOverlay(overlay, claim);
         }
+        // Set up the verify button handlers
+        setupVerifyButtonHandlers(overlay);
+        // Ensure overlay is visible
+        overlay.classList.remove('closed', 'minimized');
+        overlay.style.display = 'block';
     }
     else {
-        // If no claims were found through our extractor, create some fake claims
-        // for demonstration purposes to ensure something is always shown
-        const fakeClaims = [
-            {
-                id: 1,
-                text: "According to NASA, the global average temperature has increased by 1.1 degrees Celsius since the pre-industrial era.",
-                cleanText: "According to NASA, the global average temperature has increased by 1.1 degrees Celsius since the pre-industrial era.",
-                context: { page: 1, paragraph: 0 },
-                relevance: 0.9,
-                confidence: 0.9
-            },
-            {
-                id: 2,
-                text: "A 2019 study published in the British Journal of Sports Medicine found that regular exercise reduces the risk of cardiovascular disease by approximately 30%.",
-                cleanText: "A 2019 study published in the British Journal of Sports Medicine found that regular exercise reduces the risk of cardiovascular disease by approximately 30%.",
-                context: { page: 1, paragraph: 1 },
-                relevance: 0.85,
-                confidence: 0.85
-            },
-            {
-                id: 3,
-                text: "Satellite measurements from NASA show the global average sea level has risen 3.4 inches between 1993 and 2019.",
-                cleanText: "Satellite measurements from NASA show the global average sea level has risen 3.4 inches between 1993 and 2019.",
-                context: { page: 1, paragraph: 2 },
-                relevance: 0.8,
-                confidence: 0.8
-            }
-        ];
+        // If no claims were found, display a clear message
         const header = overlay.querySelector('.deepcite-claims-header small');
         if (header) {
-            header.textContent = `${fakeClaims.length} example claims in sidebar`;
+            header.textContent = `No claims found on this page`;
         }
-        for (const claim of fakeClaims) {
-            const dummySources = [
-                {
-                    url: 'https://en.wikipedia.org/wiki/Main_Page',
-                    title: 'Wikipedia - Related Article',
-                    score: 0.8
-                },
-                {
-                    url: 'https://www.nationalgeographic.com/',
-                    title: 'National Geographic',
-                    score: 0.7
-                }
-            ];
-            // Only add to the overlay panel - no floating highlights
-            addClaimToOverlay(overlay, claim, dummySources);
-            // Try to highlight existing content if available, but don't create new elements
-            const foundHighlight = highlightClaim(claim, dummySources);
-            if (!foundHighlight) {
-                console.log(`No matching content found for demo claim: ${claim.text.substring(0, 50)}...`);
-            }
-            // Ensure overlay is visible
-            overlay.classList.remove('closed', 'minimized');
-            overlay.style.display = 'block';
-        }
+        // Add a single "no claims found" message to the overlay
+        const noClaimsDiv = document.createElement('div');
+        noClaimsDiv.className = 'deepcite-claim-item';
+        noClaimsDiv.innerHTML = `
+      <div class="deepcite-claim-text" style="text-align: center; padding: 15px;">
+        No factual claims were detected on this page.
+      </div>
+    `;
+        overlay.appendChild(noClaimsDiv);
+        // Ensure overlay is visible
+        overlay.classList.remove('closed', 'minimized');
+        overlay.style.display = 'block';
     }
 }

@@ -27,3 +27,18 @@ export interface VerifyClaimRequest {
   type: 'VERIFY_CLAIM';
   claim: Claim;
 }
+
+export interface Settings {
+  exaKey: string;
+  openaiKey: string;
+  highlightsEnabled: boolean;
+  sidebarEnabled: boolean;
+  darkMode: boolean;
+  excludedDomains: string[];
+  maxVerificationsPerDay: number;
+  enableCaching: boolean;
+  cacheDuration: number;
+  useLLMExtraction: boolean;
+  usageCount: number;
+  lastUsageReset: number;
+}
