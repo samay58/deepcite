@@ -1,15 +1,12 @@
 /**
  * Interface for LLM extraction results containing claims and confidence scores
  */
-interface LLMExtractionResult {
+export interface LLMExtractionResult {
   claims: string[];         // Array of extracted factual claims
   confidence: number[];     // Corresponding confidence scores (0-1)
 }
 
 /**
- * NOTE: This file is kept for reference and backward compatibility.
- * The active implementation has been moved to src/extractors/llmExtractor.ts
- * 
  * Extracts factual claims from text using OpenAI's GPT-4
  * This provides more accurate claim detection than rule-based approaches
  * and includes confidence scoring for each claim
@@ -20,8 +17,7 @@ interface LLMExtractionResult {
  * - Assess confidence based on factual clarity and specificity
  * - Prioritize claims that reference research, measurements, or established facts
  */
-// Make the class global for content script access
-const LLMExtractor = class {
+export class LLMExtractor {
   private apiKey: string;
   private maxTokens = 4000; // GPT-4 context window limit
   

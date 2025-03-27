@@ -1,6 +1,6 @@
-// Import settings manager using path aliases
+// Import settings manager and types using path aliases
+import { Settings } from '@types';
 import { 
-  Settings, 
   getSettings, 
   updateSettings, 
   resetUsageCounter 
@@ -203,4 +203,4 @@ document.addEventListener('DOMContentLoaded', () => {
       if (element) element.textContent = '';
     }, 2000);
   });
-}); 
+});

@@ -29,7 +29,6 @@
       ],
       "js": [
         "lib/pdf.min.js",
-        "dist/llmExtractor.js",
         "dist/contentScript.js"
       ],
       "css": ["styles/pdf-overlay.css"]
@@ -39,4 +38,4 @@
     "default_popup": "popup.html"
   },
   "options_page": "options.html"
-} 
+}

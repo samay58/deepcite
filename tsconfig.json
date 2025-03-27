@@ -1,7 +1,7 @@
 {
   "compilerOptions": {
     "target": "ES2020",
-    "module": "CommonJS",
+    "module": "ES2020",
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
@@ -14,10 +14,8 @@
       "@extractors/*": ["src/extractors/*"],
       "@utils/*": ["src/utils/*"],
       "@types": ["src/types"]
-    },
-    // Commented out rootDir to allow files in their original locations
-    // "rootDir": "src"
+    }
   },
-  "include": ["./**/*.ts"],
+  "include": ["src/**/*.ts"],
   "exclude": ["node_modules"]
 }

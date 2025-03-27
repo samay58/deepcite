@@ -1,44 +1,5 @@
-// Define types inline since we can't use modules in service worker
-interface ExaSearchResult {
-  title: string;
-  url: string;
-  publishedDate?: string;
-  score: number;
-  highlights: string[];
-}
-
-interface VerifyClaimRequest {
-  type: 'VERIFY_CLAIM';
-  claim: {
-    id: number;
-    text: string;
-    context: {
-      page: number;
-      paragraph: number;
-    };
-    relevance: number;
-  };
-}
-
-interface Settings {
-  exaKey: string;
-  openaiKey: string;
-  highlightsEnabled: boolean;
-  sidebarEnabled: boolean;
-  darkMode: boolean;
-  excludedDomains: string[];
-  maxVerificationsPerDay: number;
-  enableCaching: boolean;
-  cacheDuration: number;
-  useLLMExtraction: boolean;
-  usageCount: number;
-  lastUsageReset: number;
-}
-
-interface ClaimCache {
-  timestamp: number;
-  results: ExaSearchResult[];
-}
+// Import types
+import { VerifyClaimRequest, ExaSearchResult } from '@types';
 
 // Import settings manager using path aliases
 import { 
@@ -178,8 +139,6 @@ chrome.runtime.onMessage.addListener((
   }
   return true; // Always return true from the listener
 });
-
-// No need for additional import as we already imported cleanupExpiredCache above
 
 // Run cache cleanup once a day
 setInterval(cleanupExpiredCache, 24 * 60 * 60 * 1000); // Every 24 hours
