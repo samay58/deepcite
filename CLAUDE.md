@@ -2,16 +2,16 @@
 
 ## Build & Development Commands
 - Build: `npm run build` (compiles TS to JS in dist/)
+- Dev: `npm run dev` (webpack in watch mode)
 - Lint: `npm run lint` (runs ESLint checks)
-- Watch mode: `npm run dev` (runs TypeScript compiler in watch mode)
-- Clean: `npm run clean` (removes all files in dist/)
-- Test extension: Load unpacked extension, navigate to webpage and click "Analyze Webpage"
-- Test PDFs: Open PDF in Chrome and click "Analyze PDF" button
-- Debug: Filter console logs by "DeepCite" in background/content scripts
+- Clean: `npm run clean` (removes files in dist/)
+- Test extension: Load unpacked extension, navigate to webpage, click "Analyze Webpage"
+- Test PDFs: Open PDF in Chrome, click "Analyze PDF" button
+- Debug: Filter console logs by "DeepCite" in browser DevTools
 
 ## Code Style Guidelines
 - TypeScript with strict typing (`strict: true` in tsconfig.json)
-- ES2020 target with CommonJS modules
+- ES2020 target with ES modules
 - Import order: built-ins → libraries → local modules
 - Format: 2-space indent, Unix line endings, single quotes, semicolons
 - Naming: camelCase for variables/functions, PascalCase for types/interfaces

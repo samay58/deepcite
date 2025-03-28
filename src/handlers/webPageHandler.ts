@@ -1,9 +1,145 @@
 import { Claim } from '../extractors/contentExtractor';
 
 /**
+ * Mapping of known domain reputations
+ * Scale is from 0 to 1 where:
+ * - 1.0: Highest credibility (established scientific journals, major reputable news)
+ * - 0.8: High credibility (well-known reputable sources)
+ * - 0.6: Medium-high credibility (generally reliable sources)
+ * - 0.4: Medium credibility (mainstream sources with varying quality)
+ * - 0.2: Low-medium credibility (less established, potentially biased sources)
+ * - 0.0: Low credibility (known unreliable/biased sources)
+ */
+const DOMAIN_REPUTATION: Record<string, number> = {
+  // Scientific and academic journals
+  'nature.com': 1.0,
+  'science.org': 1.0,
+  'nejm.org': 1.0,
+  'thelancet.com': 1.0,
+  'pnas.org': 1.0,
+  'cell.com': 1.0,
+  'plos.org': 0.9,
+  'springer.com': 0.9,
+  'sciencedirect.com': 0.9,
+  'ieee.org': 0.9,
+  'acm.org': 0.9,
+  'jstor.org': 0.9,
+  'nih.gov': 1.0,
+  'who.int': 1.0,
+  'cdc.gov': 1.0,
+  
+  // Main news sources - range based on general reputation
+  'nytimes.com': 0.9,
+  'washingtonpost.com': 0.9,
+  'wsj.com': 0.9,
+  'economist.com': 0.9,
+  'theguardian.com': 0.85,
+  'reuters.com': 0.9,
+  'apnews.com': 0.9,
+  'bbc.com': 0.9,
+  'bbc.co.uk': 0.9,
+  'bloomberg.com': 0.85,
+  'ft.com': 0.85,
+  'cnn.com': 0.7,
+  'nbcnews.com': 0.7,
+  'cbsnews.com': 0.7,
+  'abcnews.go.com': 0.7,
+  'npr.org': 0.8,
+  'politico.com': 0.7,
+  'theatlantic.com': 0.8,
+  'newyorker.com': 0.8,
+  'time.com': 0.8,
+  'latimes.com': 0.8,
+  
+  // Fact-checking sites
+  'snopes.com': 0.85,
+  'factcheck.org': 0.85,
+  'politifact.com': 0.85,
+  
+  // Encyclopedia
+  'britannica.com': 0.95,
+  'wikipedia.org': 0.8,
+  
+  // Government sites
+  'gov': 0.8, // General government sites
+  'edu': 0.8, // Educational institutions
+  
+  // Tech news
+  'wired.com': 0.8,
+  'techcrunch.com': 0.7,
+  'theverge.com': 0.7,
+  'arstechnica.com': 0.8,
+  
+  // Lower credibility or highly biased sources
+  'medium.com': 0.5,  // Mixed quality - user generated
+  'substack.com': 0.4,  // Varies wildly in quality
+  'quora.com': 0.4,
+  'reddit.com': 0.3,
+  'twitter.com': 0.3,
+  'facebook.com': 0.2,
+  'youtube.com': 0.3,
+  'tiktok.com': 0.2,
+  'instagram.com': 0.2,
+  'blogspot.com': 0.3,
+  'wordpress.com': 0.3,
+  'tumblr.com': 0.2
+};
+
+/**
+ * Determines domain reputation for confidence calculation
+ * @param url The URL of the source
+ * @returns A reputation score between 0 and 1
+ */
+export function getDomainReputation(url: string): number {
+  try {
+    // Extract domain from URL
+    const hostname = new URL(url).hostname;
+    
+    // Check for exact match
+    if (DOMAIN_REPUTATION[hostname]) {
+      return DOMAIN_REPUTATION[hostname];
+    }
+    
+    // Look for parent domain match
+    for (const domain in DOMAIN_REPUTATION) {
+      if (hostname.endsWith(`.${domain}`) || hostname === domain) {
+        return DOMAIN_REPUTATION[domain];
+      }
+    }
+    
+    // Check for TLD reliability (.gov, .edu, etc.)
+    const tldMatch = hostname.match(/\.([a-z]+)$/);
+    if (tldMatch && DOMAIN_REPUTATION[tldMatch[1]]) {
+      return DOMAIN_REPUTATION[tldMatch[1]];
+    }
+    
+    // Default rating for unknown domains - give moderate score
+    return 0.5;
+  } catch (error) {
+    console.error('Error determining domain reputation:', error);
+    return 0.5; // Default for error cases
+  }
+}
+
+/**
+ * Gets confidence tier label based on numerical score
+ * @param confidence Numerical confidence score (0-1)
+ * @returns String label for the confidence tier
+ */
+export function getConfidenceTier(confidence: number | undefined): string {
+  if (confidence === undefined) return 'Low Confidence';
+  if (confidence >= 0.8) return 'High Confidence';
+  if (confidence >= 0.5) return 'Medium Confidence';
+  return 'Low Confidence';
+}
+
+/**
  * Helper function to determine color based on confidence level
  */
-export function getConfidenceColor(confidence: number): string {
+export function getConfidenceColor(confidence: number | undefined): string {
+  // Default to low confidence if undefined
+  if (confidence === undefined) return 'var(--low-confidence)';
+  
   if (confidence >= 0.8) return 'var(--high-confidence)';   // High confidence - green
   if (confidence >= 0.5) return 'var(--medium-confidence)'; // Medium confidence - yellow/amber
   return 'var(--low-confidence)';                           // Low confidence - red
@@ -15,7 +151,17 @@ export function getConfidenceColor(confidence: number): string {
 export function createDeepCiteBadge(): HTMLElement {
   const badge = document.createElement('span');
   badge.className = 'deepcite-badge';
-  badge.textContent = 'DEEPCITE';
+  
+  // Create image element for the logo
+  const logoImg = document.createElement('img');
+  logoImg.src = chrome.runtime.getURL('images/deepcite-logo-without-text.png');
+  logoImg.alt = 'DeepCite';
+  logoImg.className = 'deepcite-badge-logo';
+  logoImg.width = 16;
+  logoImg.height = 16;
+  
+  // Add the logo to the badge
+  badge.appendChild(logoImg);
   badge.title = 'This element contains a factual claim verified by DeepCite';
   
   // We're now using CSS defined in pdf-overlay.css
@@ -55,21 +201,40 @@ export function highlightClaim(claim: Claim, sources: any[]): boolean {
       foundMatch = true;
       
       try {
-        // Enhanced styling for better visibility
-        p.style.backgroundColor = 'rgba(47, 128, 237, 0.2)'; // Increased opacity
-        p.style.borderLeft = '4px solid rgba(47, 128, 237, 0.6)'; // Thicker border, more opacity
-        p.style.padding = '8px'; // Increased padding
-        p.style.cursor = 'pointer';
-        p.style.transition = 'all 0.25s ease';
-        p.style.borderRadius = '3px'; // Subtle rounded corners
-        p.style.boxShadow = '0 1px 3px rgba(0, 0, 0, 0.05)'; // Subtle shadow
+        // Find the substring within the paragraph
+        const paragraphText = p.textContent ?? '';
+        const claimIndex = paragraphText.indexOf(claim.cleanText);
         
-        // Mark this paragraph
-        p.setAttribute('data-claim-id', claim.id.toString());
+        if (claimIndex < 0) continue; // not found in this paragraph
         
-        // Check if the paragraph already has a DEEPCITE badge to avoid duplicates
+        // Split the paragraph text into three parts: before, matched, after
+        const before = paragraphText.slice(0, claimIndex);
+        const matched = paragraphText.slice(claimIndex, claimIndex + claim.cleanText.length);
+        const after = paragraphText.slice(claimIndex + claim.cleanText.length);
+        
+        // Create a span for the highlighted claim text
+        const highlightSpan = document.createElement('span');
+        highlightSpan.className = 'exa-claim-highlight';
+        highlightSpan.textContent = matched;
+        highlightSpan.setAttribute('data-claim-id', claim.id.toString());
+        
+        // Create a numeric label for the claim
+        const labelSpan = document.createElement('span');
+        labelSpan.className = 'deepcite-claim-label';
+        labelSpan.textContent = `(${claim.id})`;
+        labelSpan.setAttribute('data-claim-id', claim.id.toString());
+        
+        // Clear the paragraph and rebuild with the highlight span and label
+        p.innerHTML = '';
+        p.appendChild(document.createTextNode(before));
+        
+        // Add the label before the highlighted text
+        p.appendChild(labelSpan);
+        p.appendChild(highlightSpan);
+        p.appendChild(document.createTextNode(after));
+        
+        // Add the DeepCite badge after the highlight
         if (!p.querySelector('.deepcite-badge')) {
-          // Add the improved DEEPCITE badge only if one doesn't already exist
           const deepciteBadge = createDeepCiteBadge();
           
           // Add confidence score to the badge if available
@@ -78,191 +243,226 @@ export function highlightClaim(claim: Claim, sources: any[]): boolean {
             deepciteBadge.title = `Confidence score: ${confidencePercent}%`;
           }
           
-          // Insert at the beginning of the paragraph
-          if (p.firstChild) {
-            p.insertBefore(deepciteBadge, p.firstChild);
-          } else {
-            p.appendChild(deepciteBadge);
-          }
+          // Insert right after the highlighted span
+          highlightSpan.insertAdjacentElement('afterend', deepciteBadge);
         }
         
-        console.log('Applied enhanced styles to paragraph');
+        console.log('Applied highlight to claim text within paragraph');
       } catch (err) {
-        console.error('Error highlighting paragraph:', err);
+        console.error('Error highlighting claim text:', err);
       }
       
-      // Create direct hover handler on the paragraph
-      let currentTooltip: HTMLElement | null = null;
-      let tooltipTimeout: number | null = null;
-      let currentSourceIndex = 0;
-      
-      // Function to update tooltip content
-      const updateTooltip = () => {
-        if (!currentTooltip) return;
+      try {
+        // Define tooltip functionality
+        let currentTooltip: HTMLElement | null = null;
+        let tooltipTimeout: number | null = null;
+        let currentSourceIndex = 0;
         
-        // We'll update the tooltip to provide a better view of multiple sources
-        let tooltipHTML = '';
-        
-        // Add claim confidence if available - with visual meter
-        if (claim.confidence !== undefined) {
-          tooltipHTML += `
-            <div class="exa-claim-confidence" style="margin-bottom: 10px; padding: 6px 8px; background: rgba(47, 128, 237, 0.05); border-radius: 6px; font-size: 13px;">
-              <span style="font-weight: bold;">Certainty:</span> 
-              <span style="display: inline-block; height: 8px; border-radius: 4px; margin: 0 6px; width: ${Math.round(claim.confidence * 100)}px; background-color: ${getConfidenceColor(claim.confidence)};">
-              </span>
-              <span style="font-weight: 500; margin-left: 4px; color: ${getConfidenceColor(claim.confidence)}">
-                ${Math.round(claim.confidence * 100)}%
-              </span>
-            </div>
-          `;
-        }
-        
-        // Add sources header
-        tooltipHTML += `<div style="font-weight: 600; margin-bottom: 10px; color: #333;">
-          Sources (${sources.length})
-        </div>`;
-        
-        // Display sources
-        if (sources.length <= 2) {
-          // Show all sources in a compact view
-          tooltipHTML += sources.map((source, index) => {
+        // Function to update tooltip content
+        const updateTooltip = () => {
+          if (!currentTooltip) return;
+          
+          // We'll update the tooltip to provide a better view of multiple sources
+          let tooltipHTML = '';
+          
+          // Add claim confidence if available - with visual meter and tier
+          if (claim.confidence !== undefined) {
+            const confidenceTier = getConfidenceTier(claim.confidence);
+            const confidencePercent = Math.round(claim.confidence * 100);
+            
+            tooltipHTML += `
+              <div class="exa-claim-confidence" style="margin-bottom: 10px; padding: 6px 8px; background: rgba(47, 128, 237, 0.05); border-radius: 6px; font-size: 13px;">
+                <span style="font-weight: bold;">${confidenceTier}:</span> 
+                <span style="display: inline-block; height: 8px; border-radius: 4px; margin: 0 6px; width: ${confidencePercent}px; background-color: ${getConfidenceColor(claim.confidence)};">
+                </span>
+                <span style="font-weight: 500; margin-left: 4px; color: ${getConfidenceColor(claim.confidence)}">
+                  ${confidencePercent}%
+                </span>
+              </div>
+            `;
+          }
+          
+          // Add sources header
+          tooltipHTML += `<div style="font-weight: 600; margin-bottom: 10px; color: #333;">
+            Sources (${sources.length})
+          </div>`;
+          
+          // Display sources
+          if (sources.length <= 2) {
+            // Show all sources in a compact view
+            tooltipHTML += sources.map((source, index) => {
+              const srcFavicon = `https://www.google.com/s2/favicons?domain=${new URL(source.url).hostname}`;
+              const domainRep = getDomainReputation(source.url);
+              
+              // Get reputation tier label
+              let reputationLabel = '';
+              if (domainRep >= 0.8) reputationLabel = 'High Credibility';
+              else if (domainRep >= 0.6) reputationLabel = 'Medium-High Credibility';
+              else if (domainRep >= 0.4) reputationLabel = 'Medium Credibility';
+              else if (domainRep >= 0.2) reputationLabel = 'Low-Medium Credibility';
+              else reputationLabel = 'Low Credibility';
+              
+              return `
+                <div style="margin-bottom: 10px; padding: 6px;">
+                  <div style="display: flex; align-items: center; margin-bottom: 6px;">
+                    <img src="${srcFavicon}" alt="Source icon" style="width: 16px; height: 16px; margin-right: 8px; border-radius: 2px;">
+                    <strong>${source.title}</strong>
+                    <span style="display: inline-block; padding: 2px 6px; background: rgba(47, 128, 237, 0.05); border-radius: 4px; font-size: 12px; margin-left: 8px; color: #666;">
+                      Relevance: ${Math.round(source.score * 100)}%
+                    </span>
+                  </div>
+                  <div style="display: flex; margin-bottom: 6px;">
+                    <span style="display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 12px; color: white; background: ${getCredibilityColor(domainRep)};">
+                      ${reputationLabel}
+                    </span>
+                  </div>
+                  <a href="${source.url}" target="_blank" style="color: #007AFF; text-decoration: none;">View source</a>
+                  ${index < sources.length - 1 ? '<hr style="margin: 10px 0; border: 0; border-top: 1px solid #eee;">' : ''}
+                </div>
+              `;
+            }).join('');
+          } else {
+            // Use pagination for 3+ sources
+            const source = sources[currentSourceIndex];
             const srcFavicon = `https://www.google.com/s2/favicons?domain=${new URL(source.url).hostname}`;
-            return `
+            const domainRep = getDomainReputation(source.url);
+            
+            // Get reputation tier label
+            let reputationLabel = '';
+            if (domainRep >= 0.8) reputationLabel = 'High Credibility';
+            else if (domainRep >= 0.6) reputationLabel = 'Medium-High Credibility';
+            else if (domainRep >= 0.4) reputationLabel = 'Medium Credibility';
+            else if (domainRep >= 0.2) reputationLabel = 'Low-Medium Credibility';
+            else reputationLabel = 'Low Credibility';
+            
+            tooltipHTML += `
               <div style="margin-bottom: 10px; padding: 6px;">
                 <div style="display: flex; align-items: center; margin-bottom: 6px;">
                   <img src="${srcFavicon}" alt="Source icon" style="width: 16px; height: 16px; margin-right: 8px; border-radius: 2px;">
                   <strong>${source.title}</strong>
                   <span style="display: inline-block; padding: 2px 6px; background: rgba(47, 128, 237, 0.05); border-radius: 4px; font-size: 12px; margin-left: 8px; color: #666;">
-                    ${Math.round(source.score * 100)}%
+                    Relevance: ${Math.round(source.score * 100)}%
+                  </span>
+                </div>
+                <div style="display: flex; margin-bottom: 6px;">
+                  <span style="display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 12px; color: white; background: ${getCredibilityColor(domainRep)};">
+                    ${reputationLabel}
                   </span>
                 </div>
                 <a href="${source.url}" target="_blank" style="color: #007AFF; text-decoration: none;">View source</a>
-                ${index < sources.length - 1 ? '<hr style="margin: 10px 0; border: 0; border-top: 1px solid #eee;">' : ''}
+              </div>
+              <div style="display: flex; align-items: center; justify-content: space-between; margin-top: 10px; padding-top: 8px; border-top: 1px solid #eee;">
+                <button id="prev-btn" ${currentSourceIndex === 0 ? 'disabled' : ''} style="background: #f8f9fa; border: 1px solid #eee; color: #333; cursor: pointer; padding: 4px 10px; border-radius: 6px;">
+                  ← Previous
+                </button>
+                <span>${currentSourceIndex + 1}/${sources.length}</span>
+                <button id="next-btn" ${currentSourceIndex === sources.length - 1 ? 'disabled' : ''} style="background: #f8f9fa; border: 1px solid #eee; color: #333; cursor: pointer; padding: 4px 10px; border-radius: 6px;">
+                  Next →
+                </button>
               </div>
             `;
-          }).join('');
-        } else {
-          // Use pagination for 3+ sources
-          const source = sources[currentSourceIndex];
-          const srcFavicon = `https://www.google.com/s2/favicons?domain=${new URL(source.url).hostname}`;
-          
-          tooltipHTML += `
-            <div style="margin-bottom: 10px; padding: 6px;">
-              <div style="display: flex; align-items: center; margin-bottom: 6px;">
-                <img src="${srcFavicon}" alt="Source icon" style="width: 16px; height: 16px; margin-right: 8px; border-radius: 2px;">
-                <strong>${source.title}</strong>
-                <span style="display: inline-block; padding: 2px 6px; background: rgba(47, 128, 237, 0.05); border-radius: 4px; font-size: 12px; margin-left: 8px; color: #666;">
-                  ${Math.round(source.score * 100)}%
-                </span>
-              </div>
-              <a href="${source.url}" target="_blank" style="color: #007AFF; text-decoration: none;">View source</a>
-            </div>
-            <div style="display: flex; align-items: center; justify-content: space-between; margin-top: 10px; padding-top: 8px; border-top: 1px solid #eee;">
-              <button id="prev-btn" ${currentSourceIndex === 0 ? 'disabled' : ''} style="background: #f8f9fa; border: 1px solid #eee; color: #333; cursor: pointer; padding: 4px 10px; border-radius: 6px;">
-                ← Previous
-              </button>
-              <span>${currentSourceIndex + 1}/${sources.length}</span>
-              <button id="next-btn" ${currentSourceIndex === sources.length - 1 ? 'disabled' : ''} style="background: #f8f9fa; border: 1px solid #eee; color: #333; cursor: pointer; padding: 4px 10px; border-radius: 6px;">
-                Next →
-              </button>
-            </div>
-          `;
-        }
-        
-        currentTooltip.innerHTML = tooltipHTML;
-        
-        // Add event listeners to buttons
-        if (sources.length > 2) {
-          const prevBtn = currentTooltip.querySelector('#prev-btn');
-          const nextBtn = currentTooltip.querySelector('#next-btn');
-          
-          if (prevBtn) {
-            prevBtn.addEventListener('click', () => {
-              if (currentSourceIndex > 0) {
-                currentSourceIndex--;
-                updateTooltip();
-              }
-            });
           }
           
-          if (nextBtn) {
-            nextBtn.addEventListener('click', () => {
-              if (currentSourceIndex < sources.length - 1) {
-                currentSourceIndex++;
-                updateTooltip();
-              }
-            });
+          currentTooltip.innerHTML = tooltipHTML;
+          
+          // Add event listeners to buttons
+          if (sources.length > 2) {
+            const prevBtn = currentTooltip.querySelector('#prev-btn');
+            const nextBtn = currentTooltip.querySelector('#next-btn');
+            
+            if (prevBtn) {
+              prevBtn.addEventListener('click', () => {
+                if (currentSourceIndex > 0) {
+                  currentSourceIndex--;
+                  updateTooltip();
+                }
+              });
+            }
+            
+            if (nextBtn) {
+              nextBtn.addEventListener('click', () => {
+                if (currentSourceIndex < sources.length - 1) {
+                  currentSourceIndex++;
+                  updateTooltip();
+                }
+              });
+            }
           }
-        }
-      };
-      
-      const clearTooltipTimeout = () => {
-        if (tooltipTimeout) {
-          clearTimeout(tooltipTimeout);
-          tooltipTimeout = null;
-        }
-      };
-      
-      const startTooltipTimeout = () => {
-        clearTooltipTimeout();
-        tooltipTimeout = window.setTimeout(() => {
-          if (currentTooltip) {
-            currentTooltip.remove();
-            currentTooltip = null;
+        };
+        
+        const clearTooltipTimeout = () => {
+          if (tooltipTimeout) {
+            clearTimeout(tooltipTimeout);
+            tooltipTimeout = null;
           }
-        }, 300);
-      };
-      
-      // Add hover handler directly to the paragraph
-      p.addEventListener('mouseenter', () => {
-        clearTooltipTimeout();
+        };
         
-        // Remove any existing tooltips
-        const existingTooltip = document.querySelector('.exa-tooltip');
-        if (existingTooltip) existingTooltip.remove();
+        const startTooltipTimeout = () => {
+          clearTooltipTimeout();
+          tooltipTimeout = window.setTimeout(() => {
+            if (currentTooltip) {
+              currentTooltip.remove();
+              currentTooltip = null;
+            }
+          }, 300);
+        };
         
-        const newTooltip = document.createElement('div');
-        newTooltip.className = 'exa-tooltip';
-        newTooltip.style.position = 'fixed';
-        newTooltip.style.background = 'white';
-        newTooltip.style.border = '1px solid #e0e0e0';
-        newTooltip.style.boxShadow = '0 8px 24px rgba(0,0,0,0.1)';
-        newTooltip.style.padding = '14px 18px';
-        newTooltip.style.borderRadius = '8px';
-        newTooltip.style.fontSize = '14px';
-        newTooltip.style.maxWidth = '320px';
-        newTooltip.style.zIndex = '999999';
-        newTooltip.style.color = '#333';
-        newTooltip.style.backdropFilter = 'blur(10px)';
-        newTooltip.style.opacity = '0';
-        newTooltip.style.transform = 'translateY(8px)';
-        newTooltip.style.transition = 'opacity 0.25s, transform 0.25s';
-        newTooltip.style.fontFamily = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
-        newTooltip.style.lineHeight = '1.5';
-        
-        // Position the tooltip
-        const rect = p.getBoundingClientRect();
-        newTooltip.style.top = `${rect.bottom + 5}px`;
-        newTooltip.style.left = `${rect.left}px`;
-        
-        document.body.appendChild(newTooltip);
-        currentTooltip = newTooltip;
-        
-        // Add animation
-        setTimeout(() => {
-          newTooltip.style.opacity = '1';
-          newTooltip.style.transform = 'translateY(0)';
-        }, 10);
-        
-        // Initial tooltip content
-        updateTooltip();
-        
-        // Add hover handlers to tooltip
-        newTooltip.addEventListener('mouseenter', clearTooltipTimeout);
-        newTooltip.addEventListener('mouseleave', startTooltipTimeout);
-      });
-      
-      p.addEventListener('mouseleave', startTooltipTimeout);
+        // Add hover handler to the highlighted span
+        const span = document.querySelector(`.exa-claim-highlight[data-claim-id="${claim.id}"]`) as HTMLElement;
+        if (span) {
+          span.addEventListener('mouseenter', () => {
+            clearTooltipTimeout();
+            
+            // Remove any existing tooltips
+            const existingTooltip = document.querySelector('.exa-tooltip');
+            if (existingTooltip) existingTooltip.remove();
+            
+            const newTooltip = document.createElement('div');
+            newTooltip.className = 'exa-tooltip';
+            newTooltip.style.position = 'fixed';
+            newTooltip.style.background = 'white';
+            newTooltip.style.border = '1px solid #e0e0e0';
+            newTooltip.style.boxShadow = '0 8px 24px rgba(0,0,0,0.1)';
+            newTooltip.style.padding = '14px 18px';
+            newTooltip.style.borderRadius = '8px';
+            newTooltip.style.fontSize = '14px';
+            newTooltip.style.maxWidth = '320px';
+            newTooltip.style.zIndex = '999999';
+            newTooltip.style.color = '#333';
+            newTooltip.style.backdropFilter = 'blur(10px)';
+            newTooltip.style.opacity = '0';
+            newTooltip.style.transform = 'translateY(8px)';
+            newTooltip.style.transition = 'opacity 0.25s, transform 0.25s';
+            newTooltip.style.fontFamily = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
+            newTooltip.style.lineHeight = '1.5';
+            
+            // Position the tooltip below the highlighted span
+            const rect = span.getBoundingClientRect();
+            newTooltip.style.top = `${rect.bottom + 5}px`;
+            newTooltip.style.left = `${rect.left}px`;
+            
+            document.body.appendChild(newTooltip);
+            currentTooltip = newTooltip;
+            
+            // Add animation
+            setTimeout(() => {
+              newTooltip.style.opacity = '1';
+              newTooltip.style.transform = 'translateY(0)';
+            }, 10);
+            
+            // Initial tooltip content
+            updateTooltip();
+            
+            // Add hover handlers to tooltip
+            newTooltip.addEventListener('mouseenter', clearTooltipTimeout);
+            newTooltip.addEventListener('mouseleave', startTooltipTimeout);
+          });
+          
+          span.addEventListener('mouseleave', startTooltipTimeout);
+        }
+      } catch (error) {
+        console.error('Error setting up tooltip handlers:', error);
+      }
       
       // Only process the first matching paragraph
       break;
@@ -533,6 +733,9 @@ export function addClaimToOverlay(overlay: HTMLElement, claim: Claim, sources: a
   claimDiv.className = 'deepcite-claim-item';
   claimDiv.setAttribute('data-claim-id', claim.id.toString());
   
+  // Get the claim number from the ID
+  const claimNumber = claim.id;
+  
   // Create the basic claim information
   let claimHTML = `
     ${(claim as any).pdfLocation ? `
@@ -540,6 +743,9 @@ export function addClaimToOverlay(overlay: HTMLElement, claim: Claim, sources: a
         Page ${(claim as any).pdfLocation.pageNum}, Paragraph ${(claim as any).pdfLocation.paragraph + 1}
       </div>
     ` : ''}
+    <div class="deepcite-claim-title">
+      <span class="deepcite-claim-number">Claim #${claimNumber}</span>
+    </div>
     <div class="deepcite-claim-text">${claim.text}</div>
     <div class="deepcite-claim-confidence" style="${claim.confidence === undefined ? 'display: none;' : ''}">
       <span style="font-weight: bold;">Certainty:</span>
@@ -619,18 +825,16 @@ export function addClaimToOverlay(overlay: HTMLElement, claim: Claim, sources: a
       return;
     }
     
-    // Find the element with the claim text and scroll to it
-    const elements = document.querySelectorAll('.exa-claim-highlight');
-    for (let i = 0; i < elements.length; i++) {
-      const elem = elements[i];
-      if (elem.textContent?.includes(claim.cleanText)) {
-        elem.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        elem.classList.add('exa-claim-highlight-flash');
-        setTimeout(() => {
-          elem.classList.remove('exa-claim-highlight-flash');
-        }, 1500);
-        break;
-      }
+    // Find the highlighted span with matching claim ID
+    const claimId = claimDiv.getAttribute('data-claim-id');
+    const highlightedSpan = document.querySelector(`.exa-claim-highlight[data-claim-id="${claimId}"]`) as HTMLElement;
+    
+    if (highlightedSpan) {
+      highlightedSpan.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      highlightedSpan.classList.add('exa-claim-highlight-flash');
+      setTimeout(() => {
+        highlightedSpan.classList.remove('exa-claim-highlight-flash');
+      }, 1500);
     }
   });
   
@@ -733,58 +937,30 @@ export function setupVerifyButtonHandlers(overlay: HTMLElement, extractedClaims:
 }
 
 /**
- * Update the sources section for a claim
+ * Update the sources section for a claim with enhanced confidence scoring
  */
 export function updateClaimSources(claimId: string, sources: any[], sourcesDiv: HTMLElement, extractedClaims: Claim[]) {
   if (!sources.length) {
     sourcesDiv.innerHTML = '<div class="deepcite-claim-sources-header">Sources:</div><em>No sources found</em>';
+    
+    // Set low confidence for claims with no sources
+    const targetClaim = extractedClaims.find(c => c.id.toString() === claimId);
+    if (targetClaim) {
+      targetClaim.confidence = 0.2; // Low default confidence for unsourced claims
+      updateConfidenceDisplay(targetClaim, sourcesDiv);
+    }
     return;
   }
   
   // Find the claim to update its confidence
   const targetClaim = extractedClaims.find(c => c.id.toString() === claimId);
   if (targetClaim) {
-    // Calculate final confidence based on sources
-    // Simple approach: use the highest source score as confidence
-    const bestSourceScore = Math.max(...sources.map(s => s.score || 0));
-    // Only set confidence if we have valid sources with scores
-    if (bestSourceScore > 0) {
-      targetClaim.confidence = bestSourceScore;
-      
-      // Find the claim element to update the confidence meter
-      const claimItem = sourcesDiv.closest('.deepcite-claim-item') as HTMLElement;
-      const confidenceContainer = claimItem?.querySelector('.deepcite-claim-confidence') as HTMLElement;
-      const confidenceMeter = claimItem?.querySelector('.confidence-meter') as HTMLElement;
-      const confidenceText = claimItem?.querySelector('.confidence-text') as HTMLElement;
-      
-      if (confidenceContainer && confidenceMeter && confidenceText) {
-        // Show the confidence container if it was hidden
-        confidenceContainer.style.display = 'block';
-        
-        // Animate from 0 to final confidence
-        confidenceMeter.style.width = '0px'; // Start from zero
-        confidenceMeter.style.transition = 'none'; // Reset transition
-        // Force a reflow
-        confidenceMeter.offsetWidth;
-        
-        // First set the color for the text
-        if (targetClaim.confidence !== undefined) {
-          confidenceText.textContent = Math.round(targetClaim.confidence * 100) + '%';
-          confidenceText.style.color = getConfidenceColor(targetClaim.confidence);
-        }
-        
-        // Then animate width with a slight delay for better visual effect
-        setTimeout(() => {
-          if (targetClaim.confidence !== undefined) {
-            confidenceMeter.style.transition = 'width 1s ease-out';
-            confidenceMeter.style.backgroundColor = getConfidenceColor(targetClaim.confidence);
-            confidenceMeter.style.width = Math.round(targetClaim.confidence * 100) + 'px';
-          }
-        }, 50);
-      }
-    }
+    // Calculate final confidence based on the enhanced algorithm
+    calculateEnhancedConfidence(targetClaim, sources);
+    updateConfidenceDisplay(targetClaim, sourcesDiv);
   }
   
+  // Update sources display with domain reputation indicators
   let html = `<div class="deepcite-claim-sources-header">Sources (${sources.length}):</div>`;
   sources.forEach((source, index) => {
     if (source.title === "No relevant sources found" || source.url === "#") {
@@ -796,11 +972,35 @@ export function updateClaimSources(claimId: string, sources: any[], sourcesDiv: 
         </div>
       `;
     } else {
+      // Calculate and add the domain reputation 
+      const domainReputation = getDomainReputation(source.url);
+      const weightedScore = source.score * domainReputation;
+      source.domainReputation = domainReputation;
+      source.weightedScore = weightedScore;
+      
+      // Get reputation tier label
+      let reputationLabel = '';
+      if (domainReputation >= 0.8) reputationLabel = 'High Credibility';
+      else if (domainReputation >= 0.6) reputationLabel = 'Medium-High Credibility';
+      else if (domainReputation >= 0.4) reputationLabel = 'Medium Credibility';
+      else if (domainReputation >= 0.2) reputationLabel = 'Low-Medium Credibility';
+      else reputationLabel = 'Low Credibility';
+      
       html += `
         <div class="deepcite-claim-source-item">
           <div class="deepcite-source-title">
             <a href="${source.url}" target="_blank">${source.title}</a>
-            <span class="deepcite-source-confidence">(${Math.round(source.score * 100)}% confidence)</span>
+            <div style="display: flex; flex-wrap: wrap; gap: 5px; margin-top: 4px;">
+              <span class="deepcite-source-confidence" 
+                    title="Source match relevance score">
+                Relevance: ${Math.round(source.score * 100)}%
+              </span>
+              <span class="deepcite-source-credibility" 
+                    style="background: ${getCredibilityColor(domainReputation)}; color: white;"
+                    title="Domain reputation based on known source credibility">
+                ${reputationLabel}
+              </span>
+            </div>
           </div>
           ${source.highlights && source.highlights.length > 0 ? 
             `<div class="deepcite-source-highlight">"${source.highlights[0]}"</div>` : ''}
@@ -810,4 +1010,119 @@ export function updateClaimSources(claimId: string, sources: any[], sourcesDiv: 
     }
   });
   sourcesDiv.innerHTML = html;
+}
+
+/**
+ * Calculate enhanced confidence score for a claim based on sources
+ */
+function calculateEnhancedConfidence(claim: Claim, sources: any[]): void {
+  if (!sources.length) {
+    claim.confidence = 0.2; // Low default for no sources
+    return;
+  }
+  
+  // Calculate weighted scores for each source based on domain reputation
+  let weightedScores: number[] = [];
+  let domains: Set<string> = new Set();
+  
+  sources.forEach(source => {
+    try {
+      // Skip placeholder or invalid sources
+      if (source.title === "No relevant sources found" || source.url === "#") {
+        return;
+      }
+      
+      // Get domain reputation
+      const domainReputation = getDomainReputation(source.url);
+      
+      // Track unique domains for diversity bonus
+      const hostname = new URL(source.url).hostname;
+      domains.add(hostname);
+      
+      // Calculate weighted score combining semantic relevance and domain credibility
+      const weightedScore = source.score * domainReputation;
+      weightedScores.push(weightedScore);
+      
+      // Store these for reference
+      source.domainReputation = domainReputation;
+      source.weightedScore = weightedScore;
+    } catch (error) {
+      console.error('Error processing source for confidence:', error);
+    }
+  });
+  
+  // If we couldn't calculate any valid scores, set a default low confidence
+  if (weightedScores.length === 0) {
+    claim.confidence = 0.2;
+    return;
+  }
+  
+  // Calculate base confidence as average of weighted scores
+  const sumWeightedScores = weightedScores.reduce((sum, score) => sum + score, 0);
+  let finalScore = sumWeightedScores / weightedScores.length;
+  
+  // Add a bonus for multiple unique sources (source diversity)
+  // More independent sources corroborating = higher confidence
+  const diversityBonus = Math.min(0.2, 0.05 * (domains.size - 1));
+  finalScore += diversityBonus;
+  
+  // Cap at 1.0
+  finalScore = Math.min(finalScore, 1.0);
+  
+  // Update the claim
+  claim.confidence = finalScore;
+}
+
+/**
+ * Get color for credibility labels
+ */
+function getCredibilityColor(reputation: number): string {
+  if (reputation >= 0.8) return '#34C759'; // High - green
+  if (reputation >= 0.6) return '#5AC8FA'; // Medium-high - blue  
+  if (reputation >= 0.4) return '#FF9500'; // Medium - amber
+  if (reputation >= 0.2) return '#FF9500'; // Low-medium - orange
+  return '#FF3B30'; // Low - red
+}
+
+/**
+ * Update the confidence display for a claim with tier label
+ */
+function updateConfidenceDisplay(claim: Claim, sourcesDiv: HTMLElement): void {
+  // Find the claim element to update the confidence meter
+  const claimItem = sourcesDiv.closest('.deepcite-claim-item') as HTMLElement;
+  const confidenceContainer = claimItem?.querySelector('.deepcite-claim-confidence') as HTMLElement;
+  const confidenceMeter = claimItem?.querySelector('.confidence-meter') as HTMLElement;
+  const confidenceText = claimItem?.querySelector('.confidence-text') as HTMLElement;
+  
+  if (!confidenceContainer || !confidenceMeter || !confidenceText || claim.confidence === undefined) {
+    return;
+  }
+  
+  // Show the confidence container if it was hidden
+  confidenceContainer.style.display = 'block';
+  
+  // Get confidence tier label
+  const confidenceTier = getConfidenceTier(claim.confidence);
+  const confidencePercent = Math.round(claim.confidence * 100);
+  
+  // Update the confidence tier and percentage
+  confidenceContainer.querySelector('span[style="font-weight: bold;"]')!.textContent = confidenceTier + ':';
+  
+  // Animate from 0 to final confidence
+  confidenceMeter.style.width = '0px'; // Start from zero
+  confidenceMeter.style.transition = 'none'; // Reset transition
+  // Force a reflow
+  confidenceMeter.offsetWidth;
+  
+  // Set the text with percentage
+  confidenceText.textContent = `${confidencePercent}%`;
+  confidenceText.style.color = getConfidenceColor(claim.confidence);
+  
+  // Then animate width with a slight delay for better visual effect
+  setTimeout(() => {
+    confidenceMeter.style.transition = 'width 1s ease-out';
+    confidenceMeter.style.backgroundColor = getConfidenceColor(claim.confidence);
+    // Ensure we have a valid number for width
+    confidenceMeter.style.width = Math.min(confidencePercent, 100) + 'px';
+  }, 50);
 }

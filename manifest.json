@@ -14,7 +14,7 @@
     "<all_urls>"
   ],
   "web_accessible_resources": [{
-    "resources": ["pdf.worker.min.js", "styles/pdf-overlay.css"],
+    "resources": ["pdf.worker.min.js", "styles/pdf-overlay.css", "images/*"],
     "matches": ["<all_urls>"]
   }],
   "background": {
@@ -34,7 +34,17 @@
       "css": ["styles/pdf-overlay.css"]
     }
   ],
+  "icons": {
+    "16": "images/deepcite-logo-without-text.png",
+    "48": "images/deepcite-logo-without-text.png",
+    "128": "images/deepcite-logo-without-text.png"
+  },
   "action": {
+    "default_icon": {
+      "16": "images/deepcite-logo-without-text.png",
+      "48": "images/deepcite-logo-without-text.png",
+      "128": "images/deepcite-logo-without-text.png"
+    },
     "default_popup": "popup.html"
   },
   "options_page": "options.html"
