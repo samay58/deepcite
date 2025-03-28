@@ -126,10 +126,17 @@ export function getDomainReputation(url: string): number {
  * @param confidence Numerical confidence score (0-1)
  * @returns String label for the confidence tier
  */
+/**
+ * Gets confidence tier label based on numerical score
+ * @param confidence Numerical confidence score (0-1)
+ * @returns String label for the confidence tier
+ */
 export function getConfidenceTier(confidence: number | undefined): string {
   if (confidence === undefined) return 'Low Confidence';
   if (confidence >= 0.8) return 'High Confidence';
+  if (confidence >= 0.65) return 'Medium-High Confidence';
   if (confidence >= 0.5) return 'Medium Confidence';
+  if (confidence >= 0.35) return 'Low-Medium Confidence';
   return 'Low Confidence';
 }
 
@@ -278,6 +285,9 @@ export function highlightClaim(claim: Claim, sources: any[]): boolean {
                 <span style="font-weight: 500; margin-left: 4px; color: ${getConfidenceColor(claim.confidence)}">
                   ${confidencePercent}%
                 </span>
+                <div style="font-size: 12px; margin-top: 5px; color: #555; font-style: italic;">
+                  ${getConfidenceExplanation(claim.confidence)}
+                </div>
               </div>
             `;
           }
@@ -748,7 +758,7 @@ export function addClaimToOverlay(overlay: HTMLElement, claim: Claim, sources: a
     </div>
     <div class="deepcite-claim-text">${claim.text}</div>
     <div class="deepcite-claim-confidence" style="${claim.confidence === undefined ? 'display: none;' : ''}">
-      <span style="font-weight: bold;">Certainty:</span>
+      <span style="font-weight: bold;">${claim.confidence !== undefined ? getConfidenceTier(claim.confidence) : 'Certainty'}:</span>
       <span class="confidence-meter" style="
         width: ${claim.confidence !== undefined ? Math.round(claim.confidence * 100) : 0}px;
         background-color: ${claim.confidence !== undefined ? getConfidenceColor(claim.confidence) : 'transparent'};
@@ -1014,6 +1024,19 @@ export function updateClaimSources(claimId: string, sources: any[], sourcesDiv: 
 
 /**
  * Calculate enhanced confidence score for a claim based on sources
+ * 
+ * Weighted scoring mechanism that considers:
+ * - Number of supporting sources (diversity bonus)
+ * - Source credibility ratings (domain reputation)
+ * - Source relevance scores (semantic match quality)
+ * 
+ * Formula components:
+ * - Base score: Weighted average of (source relevance × domain credibility)
+ * - Diversity bonus: Additional points for multiple unique sources
+ * - Quality threshold: Minimum quality requirements for high confidence
+ * 
+ * @param claim The claim to calculate confidence for
+ * @param sources Array of sources supporting the claim
  */
 function calculateEnhancedConfidence(claim: Claim, sources: any[]): void {
   if (!sources.length) {
@@ -1024,6 +1047,7 @@ function calculateEnhancedConfidence(claim: Claim, sources: any[]): void {
   // Calculate weighted scores for each source based on domain reputation
   let weightedScores: number[] = [];
   let domains: Set<string> = new Set();
+  let highQualitySources = 0;
   
   sources.forEach(source => {
     try {
@@ -1042,6 +1066,10 @@ function calculateEnhancedConfidence(claim: Claim, sources: any[]): void {
       // Calculate weighted score combining semantic relevance and domain credibility
       const weightedScore = source.score * domainReputation;
       weightedScores.push(weightedScore);
+      
+      if (source.score >= 0.7 && domainReputation >= 0.7) {
+        highQualitySources++;
+      }
       
       // Store these for reference
       source.domainReputation = domainReputation;
@@ -1066,6 +1094,9 @@ function calculateEnhancedConfidence(claim: Claim, sources: any[]): void {
   const diversityBonus = Math.min(0.2, 0.05 * (domains.size - 1));
   finalScore += diversityBonus;
   
+  const qualityBonus = Math.min(0.15, 0.075 * highQualitySources);
+  finalScore += qualityBonus;
+  
   // Cap at 1.0
   finalScore = Math.min(finalScore, 1.0);
   
@@ -1075,6 +1106,25 @@ function calculateEnhancedConfidence(claim: Claim, sources: any[]): void {
 
 /**
  * Get color for credibility labels
+ */
+/**
+ * Generate human-readable explanation for a confidence score
+ * @param confidence The confidence score to explain (0-1)
+ * @returns A string explaining the confidence score
+ */
+function getConfidenceExplanation(confidence: number | undefined): string {
+  if (confidence === undefined) return 'No sources found to verify this claim';
+  if (confidence >= 0.8) return 'High confidence based on multiple high-quality sources with strong credibility';
+  if (confidence >= 0.65) return 'Medium-high confidence based on credible sources with good corroboration';
+  if (confidence >= 0.5) return 'Medium confidence based on somewhat reliable sources';
+  if (confidence >= 0.35) return 'Low-medium confidence with limited reliable sources';
+  return 'Low confidence due to insufficient reliable sources';
+}
+
+/**
+ * Get color for credibility labels
+ * @param reputation Domain reputation score (0-1)
+ * @returns Color code for the credibility label
  */
 function getCredibilityColor(reputation: number): string {
   if (reputation >= 0.8) return '#34C759'; // High - green
@@ -1086,6 +1136,9 @@ function getCredibilityColor(reputation: number): string {
 
 /**
  * Update the confidence display for a claim with tier label
+ */
+/**
+ * Update the confidence display for a claim with tier label and explanation
  */
 function updateConfidenceDisplay(claim: Claim, sourcesDiv: HTMLElement): void {
   // Find the claim element to update the confidence meter
@@ -1125,4 +1178,6 @@ function updateConfidenceDisplay(claim: Claim, sourcesDiv: HTMLElement): void {
     // Ensure we have a valid number for width
     confidenceMeter.style.width = Math.min(confidencePercent, 100) + 'px';
   }, 50);
+  
+  confidenceText.title = getConfidenceExplanation(claim.confidence);
 }
